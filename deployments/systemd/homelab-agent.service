@@ -1,0 +1,29 @@
+[Unit]
+Description=Home Lab Monitor Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab-monitor
+Group=homelab-monitor
+ExecStart=/usr/local/bin/homelab-agent --config=/etc/homelab-monitor/agent.yaml
+Restart=on-failure
+RestartSec=5s
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=10
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

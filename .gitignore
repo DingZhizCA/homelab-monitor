@@ -1,0 +1,25 @@
+/bin/
+/agent
+/server
+/web/node_modules/
+/web/dist/
+/.vscode/
+/.idea/
+
+# Local configuration and secrets. Keep distributable examples.
+/configs/*.yaml
+!/configs/*.example.yaml
+.env
+.env.*
+!.env.example
+
+# Go test/build output.
+*.test
+coverage.out
+coverage.html
+
+# Runtime/editor artifacts.
+*.log
+*.pid
+.DS_Store
+Thumbs.db

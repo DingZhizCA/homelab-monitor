@@ -1,0 +1,21 @@
+server:
+  url: "http://127.0.0.1:8080"
+  token: ""
+
+agent:
+  device_id: "homelab-node"
+  display_name: "Home Lab Node"
+  interval: 5s
+
+monitoring:
+  idle_interval: 60s
+  active_interval: 5s
+
+collectors:
+  cpu: true
+  memory: true
+  disk: true
+  network: true
+  # Hardware-facing reads are deliberately slower to reduce wakeups.
+  sensor_interval: 1m
+  disk_interval: 5m
