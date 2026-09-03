@@ -1,3 +1,11 @@
+/*
+Package agent defines and validates homelab-agent configuration.
+
+本文件负责解析 YAML、补齐安全默认值并验证采样周期与必需字段。
+本文件不启动采集器、不访问硬件，也不向 Server 发送数据。
+
+数据链路：agent.yaml -> Config -> cmd/agent -> Collector and Sender
+*/
 package agent
 
 import (
@@ -10,8 +18,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Duration wraps time.Duration with YAML text parsing such as "5s" or "1m".
+// Duration 让配置文件使用人类可读的时间字符串，而不是容易混淆的整数单位。
 type Duration struct{ time.Duration }
 
+// UnmarshalYAML parses a YAML scalar using Go's duration syntax.
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	value, err := time.ParseDuration(node.Value)
 	if err != nil {
@@ -21,6 +32,8 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
+// Config is the validated runtime configuration shared by Agent components.
+// Config 是 Agent 各组件共用的、完成默认值处理和校验后的运行配置。
 type Config struct {
 	Server struct {
 		URL   string `yaml:"url"`
@@ -36,15 +49,22 @@ type Config struct {
 		ActiveInterval Duration `yaml:"active_interval"`
 	} `yaml:"monitoring"`
 	Collectors struct {
-		CPU            *bool    `yaml:"cpu"`
-		Memory         *bool    `yaml:"memory"`
-		Disk           *bool    `yaml:"disk"`
-		Network        *bool    `yaml:"network"`
+		CPU     *bool `yaml:"cpu"`
+		Memory  *bool `yaml:"memory"`
+		Disk    *bool `yaml:"disk"`
+		Network *bool `yaml:"network"`
+		// PowerState is opt-in because ATA commands cannot be assumed safe for
+		// every USB bridge, RAID controller, or virtual disk.
+		PowerState     *bool    `yaml:"power_state"`
 		SensorInterval Duration `yaml:"sensor_interval"`
 		DiskInterval   Duration `yaml:"disk_interval"`
+		// PowerInterval is the minimum time between power-state query attempts.
+		PowerInterval Duration `yaml:"power_state_interval"`
 	} `yaml:"collectors"`
 }
 
+// LoadConfig decodes a YAML file, applies defaults, and validates the result.
+// LoadConfig 读取 YAML 配置、应用默认值，并在返回前完成一致性校验。
 func LoadConfig(path string) (Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -72,12 +92,17 @@ func LoadConfig(path string) (Config, error) {
 	if config.Collectors.DiskInterval.Duration == 0 {
 		config.Collectors.DiskInterval.Duration = 5 * time.Minute
 	}
+	if config.Collectors.PowerInterval.Duration == 0 {
+		config.Collectors.PowerInterval.Duration = time.Minute
+	}
 	if err := config.Validate(); err != nil {
 		return Config{}, err
 	}
 	return config, nil
 }
 
+// Validate checks required identity, endpoint, collector, and cadence invariants.
+// Validate 校验设备身份、Server 地址、必需采集器和采样周期约束。
 func (c Config) Validate() error {
 	parsed, err := url.Parse(c.Server.URL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
@@ -103,6 +128,9 @@ func (c Config) Validate() error {
 	}
 	if c.Collectors.DiskInterval.Duration < c.Monitoring.ActiveInterval.Duration {
 		return fmt.Errorf("collectors.disk_interval must not be shorter than monitoring.active_interval")
+	}
+	if c.Collectors.PowerInterval.Duration < c.Monitoring.ActiveInterval.Duration {
+		return fmt.Errorf("collectors.power_state_interval must not be shorter than monitoring.active_interval")
 	}
 	return nil
 }

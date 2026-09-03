@@ -1,3 +1,11 @@
+/*
+Package agent implements Linux network counter and transfer-rate collection.
+
+本文件负责读取 /proc/net/dev，并根据相邻样本的计数差和单调时间间隔计算速率。
+本文件不抓取网络数据包，也不判断接口的业务用途。
+
+数据链路：/proc/net/dev -> counter delta -> NetworkMetrics -> Collector
+*/
 package agent
 
 import (

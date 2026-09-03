@@ -1,3 +1,11 @@
+/*
+Package agent implements low-power Linux filesystem capacity discovery.
+
+本文件负责解析挂载点、解析块设备拓扑并按介质类型决定是否调用 statfs。
+本文件不读取 SMART、硬盘温度或磁头数据，也不查询 HDD 电源模式。
+
+数据链路：mountinfo and sysfs -> safe statfs decision -> DiskMetrics -> Collector
+*/
 package agent
 
 import (
@@ -47,8 +55,13 @@ func collectDisks(refreshNonRotational, allowWake bool, now time.Time) ([]metric
 			continue
 		}
 		present[mountPoint] = true
+		disk := metrics.DiskMetrics{
+			Device: unescapeMount(right[1]), MountPoint: mountPoint, Filesystem: right[0],
+			MediaType: mediaType(rotational), PhysicalDevices: diskDeviceInfo(leaves),
+		}
 		shouldRefresh := shouldRefreshDisk(rotational, refreshNonRotational, allowWake, anyIOInFlight(leaves))
 		if !shouldRefresh {
+			result = append(result, disk)
 			continue
 		}
 		var stat syscall.Statfs_t
@@ -65,9 +78,43 @@ func collectDisks(refreshNonRotational, allowWake bool, now time.Time) ([]metric
 		if allowWake {
 			mode = "active"
 		}
-		result = append(result, metrics.DiskMetrics{Device: unescapeMount(right[1]), MountPoint: mountPoint, Filesystem: right[0], TotalBytes: total, UsedBytes: used, AvailableBytes: available, UsagePercent: usage, CollectedAt: now, CollectionMode: mode})
+		disk.TotalBytes, disk.UsedBytes, disk.AvailableBytes, disk.UsagePercent = total, used, available, usage
+		disk.CapacityAvailable, disk.CollectedAt, disk.CollectionMode = true, now, mode
+		result = append(result, disk)
 	}
 	return result, present
+}
+
+func mediaType(rotational bool) string {
+	if rotational {
+		return "hdd"
+	}
+	return "ssd"
+}
+
+func diskDeviceInfo(leaves []string) []metrics.DiskDeviceInfo {
+	result := make([]metrics.DiskDeviceInfo, 0, len(leaves))
+	seen := make(map[string]bool)
+	for _, leaf := range leaves {
+		name := filepath.Base(leaf)
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		result = append(result, metrics.DiskDeviceInfo{
+			Name: name, Model: readSysfsText(filepath.Join(leaf, "device", "model")),
+			Vendor: readSysfsText(filepath.Join(leaf, "device", "vendor")), Rotational: readSysfsText(filepath.Join(leaf, "queue", "rotational")) == "1",
+		})
+	}
+	return result
+}
+
+func readSysfsText(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func shouldRefreshDisk(rotational, refreshNonRotational, allowWake, ioInFlight bool) bool {

@@ -1,3 +1,11 @@
+/*
+Package server implements the homelab-server HTTP API and SSE endpoints.
+
+本文件负责请求方法校验、JSON 边界、指标入库、页面心跳、主动刷新和实时事件输出。
+本文件不采集 Linux 指标、不持久化历史，也不提供用户身份系统。
+
+数据链路：Agent/Dashboard HTTP -> Handler -> Store, Presence and Broker
+*/
 package server
 
 import (
@@ -15,12 +23,16 @@ import (
 
 const maxMetricsBody = 1 << 20
 
+// Handler owns HTTP behavior and coordinates Server application components.
+// Handler 组合 Store、Broker 和 Presence，但不在自身保存共享业务状态。
 type Handler struct {
 	store    *Store
 	broker   *Broker
 	presence *Presence
 }
 
+// NewHandler creates an HTTP Handler; an omitted Presence uses a fresh tracker.
+// NewHandler 的可选 Presence 参数主要用于测试注入可控时间。
 func NewHandler(store *Store, broker *Broker, presence ...*Presence) *Handler {
 	p := NewPresence()
 	if len(presence) > 0 && presence[0] != nil {
@@ -29,6 +41,7 @@ func NewHandler(store *Store, broker *Broker, presence ...*Presence) *Handler {
 	return &Handler{store: store, broker: broker, presence: p}
 }
 
+// Health serves the liveness endpoint.
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
@@ -38,6 +51,7 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	}{"ok"})
 }
 
+// Metrics accepts one validated Agent snapshot and returns control instructions.
 func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodPost) {
 		return
@@ -86,6 +100,7 @@ func activeTime(value time.Time, active bool) *time.Time {
 
 // Presence records that at least one visible Dashboard is actively viewing
 // monitoring data. The active mode remains valid for 30 minutes.
+// Presence records a heartbeat from a visible Dashboard.
 func (h *Handler) Presence(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodPost) {
 		return
@@ -97,6 +112,7 @@ func (h *Handler) Presence(w http.ResponseWriter, r *http.Request) {
 	}{"active", expiresAt})
 }
 
+// Devices returns the latest state for every known device.
 func (h *Handler) Devices(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
@@ -104,6 +120,7 @@ func (h *Handler) Devices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.store.List())
 }
 
+// Device routes single-device reads and explicit refresh requests.
 func (h *Handler) Device(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(r.URL.Path, "/refresh") {
 		h.Refresh(w, r)
@@ -126,6 +143,7 @@ func (h *Handler) Device(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, state)
 }
 
+// Refresh queues a disk refresh only when the request explicitly permits wake-up.
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodPost) {
 		return
@@ -170,6 +188,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}{job, "this operation may wake sleeping disks"})
 }
 
+// RefreshStatus returns the lifecycle state of one explicit refresh request.
 func (h *Handler) RefreshStatus(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
@@ -192,6 +211,7 @@ func containsActiveDisk(snapshot metrics.MetricEnvelope) bool {
 	return false
 }
 
+// Events streams live DeviceState updates using Server-Sent Events.
 func (h *Handler) Events(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return

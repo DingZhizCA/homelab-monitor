@@ -53,10 +53,23 @@ func TestDiskInFlightParsing(t *testing.T) {
 func TestDiskCachePreservesCollectionTime(t *testing.T) {
 	c := NewCollector(Options{})
 	collectedAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
-	c.mergeDisks([]metrics.DiskMetrics{{MountPoint: "/data", CollectedAt: collectedAt}}, map[string]bool{"/data": true})
-	c.mergeDisks(nil, map[string]bool{"/data": true})
+	c.mergeDisks([]metrics.DiskMetrics{{MountPoint: "/data", TotalBytes: 100, CapacityAvailable: true, CollectedAt: collectedAt}}, map[string]bool{"/data": true})
+	c.mergeDisks([]metrics.DiskMetrics{{MountPoint: "/data", MediaType: "hdd"}}, map[string]bool{"/data": true})
 	if len(c.disks) != 1 || !c.disks[0].CollectedAt.Equal(collectedAt) {
 		t.Fatalf("cached timestamp changed: %+v", c.disks)
+	}
+	if c.disks[0].TotalBytes != 100 || c.disks[0].MediaType != "hdd" {
+		t.Fatalf("cached capacity or fresh metadata lost: %+v", c.disks[0])
+	}
+}
+
+func TestDeferredDiskRemainsUnavailable(t *testing.T) {
+	c := NewCollector(Options{})
+	deferred := metrics.DiskMetrics{MountPoint: "/data", MediaType: "hdd"}
+	c.mergeDisks([]metrics.DiskMetrics{deferred}, map[string]bool{"/data": true})
+	c.mergeDisks([]metrics.DiskMetrics{deferred}, map[string]bool{"/data": true})
+	if len(c.disks) != 1 || c.disks[0].CapacityAvailable || c.disks[0].TotalBytes != 0 {
+		t.Fatalf("deferred capacity became available: %+v", c.disks)
 	}
 }
 

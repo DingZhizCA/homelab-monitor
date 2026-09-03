@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=homelab-monitor
 Group=homelab-monitor
-ExecStart=/usr/local/bin/homelab-server --listen=:8080
+ExecStart=/usr/local/bin/homelab-server --listen=:8080 --web-dir=/usr/local/share/homelab-monitor/web
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true

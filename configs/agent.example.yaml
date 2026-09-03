@@ -3,6 +3,7 @@ server:
   token: ""
 
 agent:
+  # Every Agent must use a unique ID. Agents sharing an ID overwrite each other.
   device_id: "homelab-node"
   display_name: "Home Lab Node"
   interval: 5s
@@ -16,6 +17,9 @@ collectors:
   memory: true
   disk: true
   network: true
+  # Enable only after confirming that the HDD uses a safe ATA/SATA path.
+  power_state: false
   # Hardware-facing reads are deliberately slower to reduce wakeups.
   sensor_interval: 1m
   disk_interval: 5m
+  power_state_interval: 1m

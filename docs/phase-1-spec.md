@@ -284,12 +284,17 @@ Phase 1 disk scope:
 - used capacity
 - available capacity
 - usage percentage
+- safely available sysfs identity metadata (media type, physical device, vendor, and model)
+
+An eligible mount may be reported before capacity is available. In that case the
+Dashboard must identify the capacity read as deferred by the low-power policy;
+it must not claim that the HDD is confirmed to be sleeping.
 
 Phase 1 does **not** poll:
 
 - SMART attributes
 - HDD temperature
-- HDD active/standby state
+- automatic power-state queries on transports other than explicitly enabled direct ATA/SATA
 - Load_Cycle_Count
 - Start_Stop_Count
 - pending/uncorrectable sectors

@@ -1,3 +1,11 @@
+/*
+Package agent implements Linux CPU usage and sensor collection.
+
+本文件负责从 /proc 计算 CPU 时间差，并从 /sys 或 /proc 获取频率和温度。
+本文件不决定采样周期，也不负责缓存、上报或 Dashboard 展示。
+
+数据链路：/proc and /sys -> CPUMetrics -> Collector
+*/
 package agent
 
 import (

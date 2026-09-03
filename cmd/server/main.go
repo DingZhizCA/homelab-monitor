@@ -23,6 +23,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -32,6 +33,7 @@ import (
 
 func main() {
 	addr := flag.String("listen", ":8080", "HTTP listen address")
+	webDir := flag.String("web-dir", "", "directory containing the built Dashboard (disabled when empty)")
 	flag.Parse()
 	store := server.NewStore()
 	broker := server.NewBroker()
@@ -46,6 +48,12 @@ func main() {
 	mux.HandleFunc("/api/v1/events", handler.Events)
 	mux.HandleFunc("/api/v1/presence", handler.Presence)
 	mux.HandleFunc("/api/v1/refresh/", handler.RefreshStatus)
+	if *webDir != "" {
+		if info, err := os.Stat(*webDir); err != nil || !info.IsDir() {
+			log.Fatalf("component=server level=ERROR msg=%q", "web-dir must be a readable directory")
+		}
+		mux.Handle("/", server.NewSPAHandler(*webDir))
+	}
 
 	httpServer := &http.Server{
 		Addr:              *addr,

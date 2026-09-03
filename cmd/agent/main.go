@@ -1,3 +1,11 @@
+/*
+Command homelab-agent runs the collection and reporting loop.
+
+本文件负责加载配置、组装 Collector 与 Sender、根据 Server 返回的页面活跃状态切换
+采样周期，并处理退出信号。本文件不实现具体 Linux 指标算法或 Server 存储。
+
+数据链路：agent.yaml -> Collector -> MetricEnvelope -> HTTP Server
+*/
 package main
 
 import (
@@ -30,8 +38,10 @@ func main() {
 	collector := agentpkg.NewCollector(agentpkg.Options{
 		Disk:           enabled(config.Collectors.Disk),
 		Network:        enabled(config.Collectors.Network),
+		PowerState:     config.Collectors.PowerState != nil && *config.Collectors.PowerState,
 		SensorInterval: config.Collectors.SensorInterval.Duration,
 		DiskInterval:   config.Collectors.DiskInterval.Duration,
+		PowerInterval:  config.Collectors.PowerInterval.Duration,
 	})
 	sender := agentpkg.NewSender(config.Server.URL, config.Server.Token)
 	device := metrics.DeviceInfo{ID: config.Agent.DeviceID, DisplayName: config.Agent.DisplayName}

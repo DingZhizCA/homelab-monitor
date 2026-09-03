@@ -20,6 +20,10 @@ func TestValidate(t *testing.T) {
 		{name: "device id", edit: func(m *MetricEnvelope) { m.Device.ID = "" }, wantErr: true},
 		{name: "cpu percentage", edit: func(m *MetricEnvelope) { m.CPU.UsagePercent = 101 }, wantErr: true},
 		{name: "memory capacity", edit: func(m *MetricEnvelope) { m.Memory.UsedBytes = 101 }, wantErr: true},
+		{name: "deferred disk capacity", edit: func(m *MetricEnvelope) { m.Disks = []DiskMetrics{{MountPoint: "/data", MediaType: "hdd"}} }},
+		{name: "available disk missing timestamp", edit: func(m *MetricEnvelope) {
+			m.Disks = []DiskMetrics{{MountPoint: "/data", CapacityAvailable: true, TotalBytes: 100}}
+		}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

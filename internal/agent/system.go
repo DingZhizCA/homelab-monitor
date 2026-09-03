@@ -1,3 +1,11 @@
+/*
+Package agent implements Linux uptime and load-average collection.
+
+本文件负责读取 /proc/uptime 与 /proc/loadavg 并转换为 SystemMetrics。
+本文件不解释负载成因，也不负责采样调度或上报。
+
+数据链路：/proc -> SystemMetrics -> Collector
+*/
 package agent
 
 import (

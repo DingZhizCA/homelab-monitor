@@ -1,0 +1,14 @@
+/*
+ * Dashboard 全局主题与基础样式。
+ * 负责 Tailwind 入口、明暗色变量和页面级排版，不定义单个业务组件的布局逻辑。
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@custom-variant dark (&:is(.dark *));
+:root { --background: oklch(.985 .004 250); --foreground: oklch(.19 .02 250); --card: oklch(1 0 0); --card-foreground: var(--foreground); --popover: var(--card); --popover-foreground: var(--foreground); --primary: oklch(.62 .17 155); --primary-foreground: white; --secondary: oklch(.95 .008 250); --secondary-foreground: var(--foreground); --muted: var(--secondary); --muted-foreground: oklch(.5 .025 250); --accent: oklch(.94 .03 155); --accent-foreground: oklch(.3 .08 155); --destructive: oklch(.58 .22 27); --border: oklch(.9 .01 250); --input: var(--border); --ring: var(--primary); --radius: .75rem; }
+.dark { --background: oklch(.14 .02 250); --foreground: oklch(.96 .008 250); --card: oklch(.19 .025 250); --card-foreground: var(--foreground); --popover: var(--card); --popover-foreground: var(--foreground); --primary: oklch(.7 .16 155); --primary-foreground: oklch(.15 .03 155); --secondary: oklch(.24 .025 250); --secondary-foreground: var(--foreground); --muted: var(--secondary); --muted-foreground: oklch(.7 .025 250); --accent: oklch(.25 .05 155); --accent-foreground: oklch(.88 .1 155); --destructive: oklch(.68 .19 25); --border: oklch(1 0 0 / 11%); --input: oklch(1 0 0 / 15%); --ring: var(--primary); }
+@theme inline { --font-sans: 'Geist Variable', system-ui, sans-serif; --color-background: var(--background); --color-foreground: var(--foreground); --color-card: var(--card); --color-card-foreground: var(--card-foreground); --color-popover: var(--popover); --color-popover-foreground: var(--popover-foreground); --color-primary: var(--primary); --color-primary-foreground: var(--primary-foreground); --color-secondary: var(--secondary); --color-secondary-foreground: var(--secondary-foreground); --color-muted: var(--muted); --color-muted-foreground: var(--muted-foreground); --color-accent: var(--accent); --color-accent-foreground: var(--accent-foreground); --color-destructive: var(--destructive); --color-border: var(--border); --color-input: var(--input); --color-ring: var(--ring); --radius-sm: calc(var(--radius) - 4px); --radius-md: calc(var(--radius) - 2px); --radius-lg: var(--radius); --radius-xl: calc(var(--radius) + 4px); }
+@layer base { * { @apply border-border outline-ring/50; } html { color-scheme: light; } html.dark { color-scheme: dark; } body { @apply bg-background text-foreground antialiased; margin: 0; min-width: 320px; } button { touch-action: manipulation; } }
+@supports (padding: env(safe-area-inset-left)) { header > div, main { padding-left: max(1rem, env(safe-area-inset-left)); padding-right: max(1rem, env(safe-area-inset-right)); } }

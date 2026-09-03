@@ -1,3 +1,11 @@
+/*
+Package agent implements Linux memory collection.
+
+本文件负责解析 /proc/meminfo，并使用 MemAvailable 语义计算可用量和使用率。
+本文件不负责采样调度、历史记录或内存压力诊断。
+
+数据链路：/proc/meminfo -> MemoryMetrics -> Collector
+*/
 package agent
 
 import (

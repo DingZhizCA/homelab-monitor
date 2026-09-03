@@ -1,3 +1,11 @@
+/*
+Package metrics validates the Agent-to-Server metrics protocol.
+
+本文件负责在快照发送和入库前检查协议不变量，包括必需字段、数值范围、时间戳、
+磁盘容量可用性和可选电源状态。本文件不负责采集、修正或补全指标。
+
+数据链路：MetricEnvelope -> Validate -> Agent sender / Server Store
+*/
 package metrics
 
 import (
@@ -5,8 +13,14 @@ import (
 	"strings"
 )
 
-type ValidationError struct{ Field, Message string }
+// ValidationError identifies the protocol field that violated an invariant.
+// ValidationError 标识违反协议约束的字段及原因，便于日志定位而不修改原始数据。
+type ValidationError struct {
+	Field   string
+	Message string
+}
 
+// Error formats a ValidationError for logs and HTTP error envelopes.
 func (e *ValidationError) Error() string {
 	if e.Field == "" {
 		return e.Message
@@ -15,6 +29,7 @@ func (e *ValidationError) Error() string {
 }
 
 // Validate checks protocol invariants before a snapshot becomes server state.
+// Validate 只验证数据，不把缺失值或异常值静默改写成看似有效的数据。
 func (m MetricEnvelope) Validate() error {
 	if m.SchemaVersion != 1 {
 		return &ValidationError{"schema_version", "must be 1"}
@@ -66,20 +81,31 @@ func (m MetricEnvelope) Validate() error {
 		if strings.TrimSpace(disk.MountPoint) == "" {
 			return &ValidationError{prefix + ".mount_point", "is required"}
 		}
-		if disk.TotalBytes == 0 {
-			return &ValidationError{prefix + ".total_bytes", "must be greater than 0"}
+		capacityAvailable := disk.CapacityAvailable || disk.TotalBytes > 0 // accept protocol-v1 agents predating the flag
+		if capacityAvailable {
+			if disk.TotalBytes == 0 {
+				return &ValidationError{prefix + ".total_bytes", "must be greater than 0 when capacity is available"}
+			}
+			if disk.UsedBytes > disk.TotalBytes || disk.AvailableBytes > disk.TotalBytes {
+				return &ValidationError{prefix, "capacity values must not exceed total_bytes"}
+			}
+			if err := percent(prefix+".usage_percent", disk.UsagePercent); err != nil {
+				return err
+			}
+			if disk.CollectedAt.IsZero() {
+				return &ValidationError{prefix + ".collected_at", "is required"}
+			}
+			if disk.CollectionMode != "passive" && disk.CollectionMode != "active" {
+				return &ValidationError{prefix + ".collection_mode", "must be passive or active"}
+			}
 		}
-		if disk.UsedBytes > disk.TotalBytes || disk.AvailableBytes > disk.TotalBytes {
-			return &ValidationError{prefix, "capacity values must not exceed total_bytes"}
-		}
-		if err := percent(prefix+".usage_percent", disk.UsagePercent); err != nil {
-			return err
-		}
-		if disk.CollectedAt.IsZero() {
-			return &ValidationError{prefix + ".collected_at", "is required"}
-		}
-		if disk.CollectionMode != "passive" && disk.CollectionMode != "active" {
-			return &ValidationError{prefix + ".collection_mode", "must be passive or active"}
+		for j, device := range disk.PhysicalDevices {
+			if device.PowerState != "" && device.PowerState != "active" && device.PowerState != "standby" && device.PowerState != "sleeping" && device.PowerState != "unknown" {
+				return &ValidationError{fmt.Sprintf("%s.physical_devices[%d].power_state", prefix, j), "must be active, standby, sleeping, or unknown"}
+			}
+			if device.PowerState != "" && device.PowerStateCollectedAt == nil {
+				return &ValidationError{fmt.Sprintf("%s.physical_devices[%d].power_state_collected_at", prefix, j), "is required when power_state is present"}
+			}
 		}
 	}
 	for i, network := range m.Networks {

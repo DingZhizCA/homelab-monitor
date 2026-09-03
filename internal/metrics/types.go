@@ -107,8 +107,8 @@ type MemoryMetrics struct {
 
 // DiskMetrics represents filesystem capacity and usage metrics for one mounted filesystem.
 // DiskMetrics 表示一个已挂载文件系统的容量和使用情况。
-// Phase 1 仅记录文件系统级容量信息，不采集 SMART、硬盘温度或电源状态，
-// 避免监控行为唤醒处于 standby 状态的机械硬盘。
+// 当前仅记录文件系统容量、安全的 sysfs 元数据和可选 ATA 电源状态；不采集
+// SMART、硬盘温度或磁头计数，避免监控行为唤醒 standby 状态的机械硬盘。
 type DiskMetrics struct {
 	// Device identifies the underlying device when it can be safely determined.
 	// Device 表示该文件系统对应的底层设备，例如 /dev/nvme0n1p2。
@@ -121,6 +121,18 @@ type DiskMetrics struct {
 	// Filesystem is the filesystem type, such as ext4 or xfs.
 	// Filesystem 表示文件系统类型，例如 ext4、xfs。
 	Filesystem string `json:"filesystem"`
+
+	// MediaType is derived from the kernel's rotational flag without issuing
+	// any command or read to the storage medium.
+	MediaType string `json:"media_type"`
+
+	// PhysicalDevices describes the leaf block devices backing this mount.
+	// The values come from sysfs and are safe to inspect while an HDD sleeps.
+	PhysicalDevices []DiskDeviceInfo `json:"physical_devices"`
+
+	// CapacityAvailable distinguishes a deliberately deferred low-power read
+	// from a real filesystem whose capacity happens to be zero.
+	CapacityAvailable bool `json:"capacity_available"`
 
 	// TotalBytes is the total filesystem capacity, in bytes.
 	// TotalBytes 表示文件系统总容量，单位为字节。
@@ -145,6 +157,29 @@ type DiskMetrics struct {
 	// CollectionMode is passive for normal sampling and active for an explicit
 	// user-approved refresh that may wake a sleeping disk.
 	CollectionMode string `json:"collection_mode"`
+}
+
+// DiskDeviceInfo contains hardware identity and an optional non-waking ATA
+// power-state observation. It does not include SMART data, temperature,
+// spindle speed, or head/load counters.
+type DiskDeviceInfo struct {
+	// Name is the Linux leaf block-device name, without the /dev prefix.
+	Name string `json:"name"`
+
+	// Model and Vendor come from sysfs and do not require media access.
+	Model  string `json:"model,omitempty"`
+	Vendor string `json:"vendor,omitempty"`
+
+	// Rotational reports the kernel queue's rotational attribute.
+	Rotational bool `json:"rotational"`
+
+	// PowerState is active, standby, sleeping, or unknown. An empty value means
+	// automatic power-state checks are disabled or unsafe for this transport.
+	PowerState string `json:"power_state,omitempty"`
+
+	// PowerStateCollectedAt is the time of the latest query attempt. Unknown is
+	// still timestamped so the Dashboard never presents it as a fresh success.
+	PowerStateCollectedAt *time.Time `json:"power_state_collected_at,omitempty"`
 }
 
 // NetworkMetrics represents traffic counters and calculated transfer rates for one network interface.

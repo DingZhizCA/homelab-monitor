@@ -1,3 +1,11 @@
+/*
+Package server implements current device state and refresh-job storage.
+
+本文件负责保存每台设备最新快照、根据真实接收时间计算在线状态，并管理一次性磁盘
+刷新任务。本文件不持久化历史、不处理 HTTP，也不采集指标。
+
+数据链路：metrics Handler -> Store -> REST reads and SSE publication
+*/
 package server
 
 import (
@@ -10,10 +18,17 @@ import (
 	"github.com/DingZhizCA/homelab-monitor/internal/metrics"
 )
 
+// DeviceState pairs the latest snapshot with Server receipt time and liveness.
+// DeviceState 将 Agent 快照、Server 接收时间和动态在线状态组合为 API 数据。
 type DeviceState struct {
-	Snapshot   metrics.MetricEnvelope `json:"snapshot"`
-	ReceivedAt time.Time              `json:"received_at"`
-	Status     string                 `json:"status"`
+	// Snapshot is the latest valid payload received from the Agent.
+	Snapshot metrics.MetricEnvelope `json:"snapshot"`
+
+	// ReceivedAt is Server wall-clock time, not Agent sampling time.
+	ReceivedAt time.Time `json:"received_at"`
+
+	// Status is online, stale, or offline and is recalculated when read.
+	Status string `json:"status"`
 }
 
 type storedSnapshot struct {
@@ -21,15 +36,28 @@ type storedSnapshot struct {
 	receivedAt time.Time
 }
 
+// RefreshJob tracks one user-authorized disk refresh request.
+// RefreshJob 跟踪一次可能唤醒 HDD 的用户授权刷新任务。
 type RefreshJob struct {
-	ID        string    `json:"request_id"`
-	DeviceID  string    `json:"device_id"`
-	Status    string    `json:"status"`
+	// ID is an unpredictable correlation identifier returned to Dashboard.
+	ID string `json:"request_id"`
+
+	// DeviceID binds authorization to one stable Agent identity.
+	DeviceID string `json:"device_id"`
+
+	// Status is queued, delivered, completed, failed, or expired.
+	Status string `json:"status"`
+
+	// CreatedAt and UpdatedAt use Server time for lifecycle decisions.
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	Error     string    `json:"error,omitempty"`
+
+	// Error is populated only when an Agent reports refresh failure.
+	Error string `json:"error,omitempty"`
 }
 
+// Store holds current device snapshots and refresh jobs in memory.
+// Store 使用锁保护共享 map；Server 重启后其中的数据不会保留。
 type Store struct {
 	mu                 sync.RWMutex
 	snapshots          map[string]storedSnapshot
@@ -38,10 +66,12 @@ type Store struct {
 	now                func() time.Time
 }
 
+// NewStore creates an initialized in-memory Store.
 func NewStore() *Store {
 	return &Store{snapshots: make(map[string]storedSnapshot), pendingDiskRefresh: make(map[string]string), refreshJobs: make(map[string]RefreshJob), now: time.Now}
 }
 
+// Update replaces one device's latest snapshot using Server receipt time.
 func (s *Store) Update(snapshot metrics.MetricEnvelope) DeviceState {
 	now := s.now()
 	s.mu.Lock()
@@ -60,6 +90,7 @@ func (s *Store) Update(snapshot metrics.MetricEnvelope) DeviceState {
 	return stateAt(snapshot, now, now)
 }
 
+// RequestDiskRefresh queues a single refresh unless the device is unknown.
 func (s *Store) RequestDiskRefresh(deviceID string) (RefreshJob, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,6 +108,7 @@ func (s *Store) RequestDiskRefresh(deviceID string) (RefreshJob, bool, error) {
 	return job, true, nil
 }
 
+// TakeDiskRefresh atomically delivers and removes a device's pending request.
 func (s *Store) TakeDiskRefresh(deviceID string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -89,6 +121,7 @@ func (s *Store) TakeDiskRefresh(deviceID string) string {
 	return requestID
 }
 
+// GetRefresh returns a refresh job and expires overdue unfinished work.
 func (s *Store) GetRefresh(requestID string) (RefreshJob, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -103,6 +136,7 @@ func (s *Store) GetRefresh(requestID string) (RefreshJob, bool) {
 	return job, true
 }
 
+// Get returns one device with liveness calculated at read time.
 func (s *Store) Get(deviceID string) (DeviceState, bool) {
 	s.mu.RLock()
 	stored, ok := s.snapshots[deviceID]
@@ -113,6 +147,7 @@ func (s *Store) Get(deviceID string) (DeviceState, bool) {
 	return stateAt(stored.snapshot, stored.receivedAt, s.now()), true
 }
 
+// List returns all devices sorted by stable device ID with current liveness.
 func (s *Store) List() []DeviceState {
 	s.mu.RLock()
 	items := make([]storedSnapshot, 0, len(s.snapshots))
