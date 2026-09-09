@@ -157,6 +157,12 @@ journalctl -u homelab-server
 journalctl -u homelab-agent
 ```
 
+当前生产 Agent 以非特权 `homelab-monitor` 用户运行，并使用
+`PrivateDevices=true`。因此即使配置启用了 `power_state`，生产 systemd 服务也
+可能因为无法访问主机块设备而返回 `unknown`。不要通过让整个 Agent 以 root
+运行或加入 `disk` 组来绕过这一权限边界；后续 Storage Health 阶段将设计最小
+权限的硬件查询机制。
+
 ## 项目结构
 
 代码注释和文档注释统一遵循

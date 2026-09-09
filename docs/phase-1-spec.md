@@ -73,7 +73,8 @@ Do **not** add the following in Phase 1 unless this specification is revised fir
 - offline Agent queue/buffer
 - detailed SMART collection
 - HDD temperature polling
-- HDD power-state polling
+- general/default HDD power-state polling; Phase 1 only permits an explicitly enabled,
+  low-frequency ATA CHECK POWER MODE query for confirmed direct ATA/SATA HDDs
 - Load_Cycle_Count polling
 
 Avoid speculative abstractions for these future features.

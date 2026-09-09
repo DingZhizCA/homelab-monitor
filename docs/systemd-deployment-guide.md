@@ -11,17 +11,23 @@
 > Home Lab Monitor 从 tmux 迁移到 systemd。执行前保留现有 Agent 配置，
 > 不要在输出中泄露 token；完成后检查两个服务、8080 端口和健康接口。
 
-## 当前已知状态（2026-09-03）
+## 当前生产状态（2026-09-09）
+
+Phase 1 的 systemd 部署已经完成实机验收：
 
 - 项目目录：`/home/johnding/workspace/projects/homelab-monitor`
-- `/usr/local/bin/homelab-server` 和 `/usr/local/bin/homelab-agent` 已存在
-- Dashboard 已复制到 `/usr/local/share/homelab-monitor/web`
-- systemd 单元尚未安装
-- `homelab-monitor` 系统用户尚未创建
-- `/etc/homelab-monitor/agent.yaml` 尚不存在
-- 当前未检测到运行中的 Server 或 Agent
+- Server：`/usr/local/bin/homelab-server`
+- Agent：`/usr/local/bin/homelab-agent`
+- Dashboard：`/usr/local/share/homelab-monitor/web`
+- Agent 配置：`/etc/homelab-monitor/agent.yaml`
+- 两个服务均由专用非特权用户 `homelab-monitor` 运行
+- `homelab-server.service` 已启用并可在开机后自动启动
+- `homelab-agent.service` 已启用并可在开机后自动启动
+- Server 和 Agent 的异常退出自动重启已经通过实机验证
+- Server 重启导致内存状态丢失后，Agent 能在下一采样周期自动重新上报
+- journald、Health API、Dashboard 和 Agent → Server 上报链路均已通过验收
 
-新会话必须重新检查这些状态，不能假设它们仍然不变。
+维护时仍应首先检查实际运行状态，不应仅依赖本文记录。
 
 ## 1. 检查是否仍有 tmux 进程
 
@@ -252,5 +258,20 @@ sudo ss -ltnp | grep ':8080'
 
 systemd 只负责托管进程，不会改变采集频率，也不会额外访问 HDD。Agent 仍然
 遵守项目的最低功耗策略：页面无人访问时使用 60 秒采样，CPU 温度默认每分钟
-读取一次，空闲 HDD 不执行 `statfs`、SMART 或硬件探测。只有用户在网页中明确
-执行主动刷新，才允许一次可能唤醒 HDD 的容量读取。
+读取一次，空闲 HDD 不执行 `statfs`、SMART 或会访问介质的硬件探测。只有用户
+在网页中明确执行主动刷新，才允许一次可能唤醒 HDD 的容量读取。
+
+可选的 ATA CHECK POWER MODE 查询是上述规则的受控例外：只有在配置中显式启用
+`power_state` 且设备确认为 direct ATA/SATA HDD 时，Agent 才会低频执行
+`hdparm -C`。实机验证已经确认该查询可以识别 HGST HDD 的 standby 状态，并且
+查询本身不会唤醒该磁盘。
+
+当前生产 Agent 以非特权 `homelab-monitor` 用户运行，并启用 `PrivateDevices=true`。
+因此生产服务不能直接查询主机 `/dev/sdb` 的 ATA power state，当前会安全降级为
+`power_state: unknown`。这不会导致 Agent 失败，也不会放宽 HDD 的 never-wake
+策略。Phase 1 不通过把 Agent 整体改为 root 或加入 `disk` 组来解决该问题；
+最小权限的硬件查询 helper 留待后续 Storage Health 阶段设计。
+
+`PrivateTmp=true` 还可能使 Agent 在 mount namespace 中看到 `/var/tmp` 对根文件
+系统的额外视图。目前这可能在 Dashboard 中形成重复 filesystem 项；这是已知的
+采集过滤问题，不影响 Phase 1 的 systemd 运行和 HDD 安全性。
