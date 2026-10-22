@@ -36,8 +36,8 @@ Owner 可以管理规则、静默、插件相关告警和告警版本；Viewer �
 
 当前 `internal/alerts` 实现纯规则结构校验与单轮三值评估：单指标比较、嵌套 AND/OR、Fresh 数据质量、设备/单位匹配；Stale、Missing、Unsupported 或跨设备数据都会成为 Unknown。规则可通过 `labels` 精确选择网络接口、挂载点等 Descriptor 维度；维度键必须与 Descriptor 声明完全匹配，缺少所选序列时结果为 Unknown，不会回退到其他维度。显式 `SamplesFromMetricResults` 适配器可把已授权 Dashboard 查询结果转换成评估输入，保留维度和数据质量；告警包不自行查询存储或触发采集。表达式深度和条件数上限必须由调用方显式提供，没有默认阈值或模板。
 
-`AdvanceIncident` 现提供纯内存状态转移函数，覆盖 Inactive/Pending/Firing/Recovering/Resolved；待触发和恢复时长、Unknown 行为、Disabled 行为都必须逐次由调用方显式提供。两个时长都使用必填指针，nil 会被拒绝；显式零时长表示对应状态立即越过，不隐含任何产品默认值。`hold` 保留原时间戳（等待期间墙钟仍继续计时），`reset_pending` 清除 Pending 或将 Recovering 还原为 Firing，`resolve` 关闭活动状态；Unknown 与 Disabled 的策略可分别设置。函数拒绝乱序评估和隐式 Rule Revision 迁移；它不持久化、不生成通知事件、不处理规则删除或旧 Incident 的迁移，因此选定持久化及业务策略前不得接入 Server。生产规则与 Incident 持久化、通知去重/静默/订阅/失败重试仍未实现或定案。
+`AdvanceIncident` 提供无存储副作用的状态转移函数，覆盖 Inactive/Pending/Firing/Recovering/Resolved；待触发和恢复时长、Unknown 行为、Disabled 行为都必须由调用方显式提供。两个时长都使用必填指针，nil 会被拒绝；显式零时长表示对应状态立即越过，不隐含任何产品默认值。`hold` 保留原时间戳（等待期间墙钟仍继续计时），`reset_pending` 清除 Pending 或将 Recovering 还原为 Firing，`resolve` 关闭活动状态；Unknown 与 Disabled 的策略可分别设置。函数和 SQLite 仓储都拒绝乱序评估及隐式 Rule Revision 迁移。评估调度、规则删除或旧 Incident 迁移、通知去重/静默/订阅/失败重试仍未实现。
 
-`MemoryIncidentRepository` 提供仅供开发和测试的有界当前状态存储；构造时必须显式给出最大规则状态数。每次推进携带预期的上一评估时间，仓储在同一锁内执行 CAS 与状态转移；相同时间、结果和 Revision 的重试幂等，不同并发推进只有一个成功。容量满时拒绝新规则状态，不淘汰既有状态；规则 Revision 变化仍明确返回迁移错误。该实现不持久化、不清理已解决状态，也不生成或投递通知，避免在保留和迁移策略确认前形成隐含行为。
+`MemoryIncidentRepository` 保留给开发和单元测试；`storage.IncidentRepository` 将相同的有界当前状态保存到 `core.db`。两者构造时都必须显式给出最大规则状态数，每次推进携带预期的上一评估时间并执行 CAS；相同时间、结果和 Revision 的重试幂等，不同并发推进只有一个成功。容量满时拒绝新规则状态，不淘汰既有状态；规则 Revision 变化明确返回迁移错误。SQLite 仓储经过进程关闭重开测试，但尚未由评估调度器装配，也不清理已解决状态或生成通知。
 
 `MemoryRuleRepository` 保留给开发和单元测试；`storage.AlertRuleRepository` 将规则当前指针和不可变 Revision 保存到 `core.db`。两者都以 `(device_id, rule_id)` 隔离规则，要求调用方提供期望当前 Revision，历史按 Revision 倒序读取；回滚读取历史内容并以调用方明确给出的更高新 Revision 提交，不覆盖旧历史。SQLite 写入事务重新检查当前 Owner，CAS 冲突和审计校验失败均不部分写入，相同 Revision 与内容的重试幂等且不重复审计。`RuleService` 和 `AlertRuleHandler` 继续执行 Owner、HTTPS Session、Origin、严格 JSON 和请求体边界。`cmd/server` 只有在认证完整启用，并显式给出请求体、表达式深度和条件数上限时装配规则路由；没有默认阈值或模板。敏感操作再认证、规则删除与旧 Incident 迁移仍未实现。

@@ -13,7 +13,7 @@
 
 当前第一版 `metrics.db` schema 保存批次 ID、设备 ID、内容 SHA-256、快照数，以及按设备和固定精度 UTC 采样时间索引的完整 `MetricEnvelope` JSON。原始历史适配器通过该索引流式读取范围内快照，复用 Dashboard Descriptor Registry 提取现有指标，并在达到请求点数时停止。全局采样时间和批次接收时间索引支持有界保留清理；指标拆列和聚合表由后续迁移实现。
 
-`core.db` 已有用户、服务端 Session、插件 Desired/Reported State、Dashboard/不可变修订、告警规则不可变修订和通用审计事件 schema。认证仓储将首次 Owner、Owner 创建账户及角色/启用状态变更与对应审计事件放在同一事务，原子复核当前 Owner 和最后 Owner 约束；Session 只保存 SHA-256 Token 摘要。Dashboard 仓储在事务内复核当前 Actor 启用状态和角色，以 CAS 更新草稿或发布指针；共享创建、草稿保存、发布和回滚与审计事件原子提交。告警规则仓储同样复核当前 Owner，以 `(device_id, rule_id)` 隔离历史并原子推进当前 Revision；相同内容重试幂等，回滚写入更高新 Revision。Session 过期清理周期仍未确定；当前时间保留任务只处理 `metrics.db`，不会清理 Session 或其他控制面数据。Incident 尚未接入该库。
+`core.db` 已有用户、服务端 Session、插件 Desired/Reported State、Dashboard/不可变修订、告警规则不可变修订、Incident 当前状态和通用审计事件 schema。认证仓储将首次 Owner、Owner 创建账户及角色/启用状态变更与对应审计事件放在同一事务，原子复核当前 Owner 和最后 Owner 约束；Session 只保存 SHA-256 Token 摘要。Dashboard 仓储在事务内复核当前 Actor 启用状态和角色，以 CAS 更新草稿或发布指针；共享创建、草稿保存、发布和回滚与审计事件原子提交。告警规则仓储同样复核当前 Owner，以 `(device_id, rule_id)` 隔离历史并原子推进当前 Revision；相同内容重试幂等，回滚写入更高新 Revision。Incident 仓储保存每条设备规则的当前转换状态，要求显式最大条数，以最后评估时间执行 CAS，并拒绝隐式跨 Rule Revision 迁移。Session 过期清理周期仍未确定；当前时间保留任务只处理 `metrics.db`，不会清理 Session 或其他控制面数据。
 
 ## 数据域
 | 数据域 | 主要数据 | 保护重点 |

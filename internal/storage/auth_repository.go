@@ -118,6 +118,19 @@ var coreMigrations = []Migration{
 	);
 	CREATE INDEX alert_rule_history ON alert_rule_revisions (device_id, rule_id, revision DESC);`,
 	},
+	{
+		Version: 5,
+		Name:    "incident_current_state",
+		SQL: `CREATE TABLE incident_states (
+		device_id TEXT NOT NULL,
+		rule_id TEXT NOT NULL,
+		rule_revision INTEGER NOT NULL CHECK (rule_revision > 0),
+		last_evaluated_at TEXT NOT NULL,
+		state_json BLOB NOT NULL,
+		PRIMARY KEY (device_id, rule_id)
+	);
+	CREATE INDEX incident_states_device ON incident_states (device_id, rule_id);`,
+	},
 }
 
 // AuthRepository implements the auth user and session persistence boundaries.

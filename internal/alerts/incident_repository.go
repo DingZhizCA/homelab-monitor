@@ -20,6 +20,13 @@ var (
 	ErrIncidentCapacity        = errors.New("incident repository capacity reached")
 )
 
+// IncidentRepository stores current state with timestamp compare-and-swap.
+type IncidentRepository interface {
+	Current(context.Context, string, string) (IncidentState, bool, error)
+	ListCurrent(context.Context, string) ([]IncidentState, error)
+	Advance(context.Context, Rule, EvaluationResult, time.Time, IncidentPolicy, time.Time) (IncidentState, error)
+}
+
 type incidentKey struct {
 	deviceID string
 	ruleID   string
@@ -31,6 +38,8 @@ type MemoryIncidentRepository struct {
 	maxEntries int
 	states     map[incidentKey]IncidentState
 }
+
+var _ IncidentRepository = (*MemoryIncidentRepository)(nil)
 
 // NewMemoryIncidentRepository requires an explicit upper bound for retained states.
 func NewMemoryIncidentRepository(maxEntries int) (*MemoryIncidentRepository, error) {

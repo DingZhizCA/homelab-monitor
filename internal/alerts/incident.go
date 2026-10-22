@@ -193,6 +193,11 @@ func validateIncidentState(state IncidentState) error {
 	return nil
 }
 
+// ValidateIncidentState verifies a state loaded by a persistence adapter.
+func ValidateIncidentState(state IncidentState) error {
+	return validateIncidentState(state)
+}
+
 func applyUncertainBehavior(state *IncidentState, at time.Time, behavior UncertainBehavior) {
 	switch behavior {
 	case UncertainHold:
