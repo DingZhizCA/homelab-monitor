@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -29,16 +30,15 @@ import (
 	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/server"
-	"github.com/DingZhizCA/homelab-monitor/internal/storage"
 )
 
-type metricStorageConfig struct {
-	directory    string
-	maxSnapshots int
-	maxBodyBytes int64
+func main() {
+	if err := run(); err != nil {
+		log.Fatalf("component=server level=ERROR msg=%q", err)
+	}
 }
 
-func main() {
+func run() error {
 	addr := flag.String("listen", ":8080", "HTTP(S) listen address")
 	webDir := flag.String("web-dir", "", "directory containing the built Dashboard (disabled when empty)")
 	tlsCert := flag.String("tls-cert", "", "TLS certificate for HTTPS (both TLS flags are required together)")
@@ -47,43 +47,52 @@ func main() {
 	storageDirectory := flag.String("storage-dir", "", "private local SSD directory for core.db and metrics.db (disabled when empty)")
 	metricMaxSnapshots := flag.Int("metrics-batch-max-snapshots", 0, "maximum snapshots accepted in one persisted Agent batch")
 	metricMaxBodyBytes := flag.Int64("metrics-batch-max-body-bytes", 0, "maximum encoded bytes accepted by the persisted Agent batch endpoint")
+	var authOrigins stringListFlag
+	flag.Var(&authOrigins, "auth-origin", "allowed HTTPS browser Origin; repeat for additional Origins")
+	authSessionTTL := flag.Duration("auth-session-ttl", 0, "server-side browser Session lifetime")
+	authLoginMaxKeys := flag.Int("auth-login-max-keys", 0, "maximum retained login limiter identities")
+	authLoginMaxAttempts := flag.Int("auth-login-max-attempts", 0, "maximum login-related attempts per identity and window")
+	authLoginWindow := flag.Duration("auth-login-window", 0, "login limiter fixed-window duration")
+	historyMaxRange := flag.Duration("history-max-range", 0, "maximum time range for one historical metric query")
+	historyMaxPoints := flag.Int("history-max-points", 0, "maximum observations returned by one historical metric query")
 	flag.Parse()
 	if (*tlsCert == "") != (*tlsKey == "") {
-		log.Fatal("component=server level=ERROR msg=both tls-cert and tls-key are required")
+		return errors.New("both tls-cert and tls-key are required")
 	}
 	if *agentCredentials == "" {
 		log.Printf("component=server level=WARN msg=%q", "Agent device authentication is disabled for compatibility; metrics requests are not bound to device credentials")
 	}
-	if *storageDirectory != "" && *agentCredentials == "" {
-		log.Fatal("component=server level=ERROR msg=persisted metrics batches require Agent device credentials")
+	metricConfig := metricBatchRuntimeConfig{maxSnapshots: *metricMaxSnapshots, maxBodyBytes: *metricMaxBodyBytes}
+	if !metricConfig.disabled() && *agentCredentials == "" {
+		return errors.New("persisted metrics batches require Agent device credentials")
+	}
+	authConfig := authRuntimeConfig{
+		origins: authOrigins, sessionTTL: *authSessionTTL,
+		loginMaxKeys: *authLoginMaxKeys, loginMaxAttempts: *authLoginMaxAttempts, loginWindow: *authLoginWindow,
+		historyMaxRange: *historyMaxRange, historyMaxPoints: *historyMaxPoints,
+	}
+	if !authConfig.disabled() && *tlsCert == "" {
+		return errors.New("human authentication requires configured HTTPS")
 	}
 	if *webDir != "" {
 		if info, err := os.Stat(*webDir); err != nil || !info.IsDir() {
-			log.Fatalf("component=server level=ERROR msg=%q", "web-dir must be a readable directory")
+			return errors.New("web-dir must be a readable directory")
 		}
 	}
 	var deviceAuthorizer server.DeviceAuthorizer
 	if *agentCredentials != "" {
 		if *tlsCert == "" {
-			log.Fatal("component=server level=ERROR msg=agent credentials require configured HTTPS")
+			return errors.New("agent credentials require configured HTTPS")
 		}
 		credentials, err := server.LoadDeviceCredentials(*agentCredentials)
 		if err != nil {
-			log.Fatalf("component=server level=ERROR msg=%q", err)
+			return err
 		}
 		deviceAuthorizer = credentials
 	}
-	store := server.NewStore()
-	broker := server.NewBroker()
-	presence := server.NewPresence()
-	handler := server.NewHandlerWithDeviceAuthorizer(store, broker, deviceAuthorizer, presence)
-	databases, metricsBatch, err := openMetricStorage(context.Background(), metricStorageConfig{
-		directory:    *storageDirectory,
-		maxSnapshots: *metricMaxSnapshots,
-		maxBodyBytes: *metricMaxBodyBytes,
-	}, handler)
+	databases, err := openServerStorage(context.Background(), *storageDirectory)
 	if err != nil {
-		log.Fatalf("component=server level=ERROR msg=%q", err)
+		return err
 	}
 	if databases != nil {
 		defer func() {
@@ -93,12 +102,27 @@ func main() {
 		}()
 		log.Printf("component=server level=INFO storage=%q msg=%q", *storageDirectory, "SQLite storage initialized")
 	}
-	router, err := server.NewRouter(server.RouterOptions{API: handler, MetricsBatch: metricsBatch, WebDirectory: *webDir})
+	store := server.NewStore()
+	broker := server.NewBroker()
+	presence := server.NewPresence()
+	handler := server.NewHandlerWithDeviceAuthorizer(store, broker, deviceAuthorizer, presence)
+	metricsBatch, err := buildMetricBatchRuntime(databases, handler, metricConfig)
 	if err != nil {
-		if databases != nil {
-			_ = databases.Close()
-		}
-		log.Fatalf("component=server level=ERROR msg=%q", err)
+		return err
+	}
+	humanAuth, err := buildAuthRuntime(databases, store, authConfig)
+	if err != nil {
+		return err
+	}
+	options := server.RouterOptions{API: handler, MetricsBatch: metricsBatch, WebDirectory: *webDir}
+	if humanAuth != nil {
+		options.Auth = humanAuth.handler
+		options.MetricQueries = humanAuth.queries
+		options.MetricHistory = humanAuth.history
+	}
+	router, err := server.NewRouter(options)
+	if err != nil {
+		return err
 	}
 
 	httpServer := &http.Server{
@@ -126,32 +150,8 @@ func main() {
 		serveErr = httpServer.ListenAndServe()
 	}
 	if err := serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+		return fmt.Errorf("serve HTTP: %w", err)
 	}
 	log.Print("component=server level=INFO msg=stopped")
-}
-
-func openMetricStorage(ctx context.Context, config metricStorageConfig, api *server.Handler) (*storage.Databases, *server.MetricsBatchHandler, error) {
-	disabled := config.directory == "" && config.maxSnapshots == 0 && config.maxBodyBytes == 0
-	if disabled {
-		return nil, nil, nil
-	}
-	if config.directory == "" || config.maxSnapshots < 1 || config.maxBodyBytes < 1 {
-		return nil, nil, errors.New("storage-dir and positive metrics batch limits must be configured together")
-	}
-	databases, err := storage.Open(ctx, config.directory)
-	if err != nil {
-		return nil, nil, err
-	}
-	writer, err := storage.NewMetricBatchWriter(databases.Metrics, config.maxSnapshots)
-	if err != nil {
-		_ = databases.Close()
-		return nil, nil, err
-	}
-	handler, err := server.NewMetricsBatchHandler(api, writer, config.maxSnapshots, config.maxBodyBytes)
-	if err != nil {
-		_ = databases.Close()
-		return nil, nil, err
-	}
-	return databases, handler, nil
+	return nil
 }

@@ -34,7 +34,7 @@
 ## 当前仓储接入点
 现有 `internal/server.Handler` 通过 `CurrentStateRepository` 访问当前设备快照与显式刷新任务；插件状态 API 通过独立的 `PluginStateStore` 访问期望/上报状态。当前实现仍是进程内内存存储，接口仅为后续持久化适配器提供替换点，不表示状态已经持久化。
 
-本地人类用户的密码和服务端 Session 逻辑位于 `internal/auth`，HTTP 认证 Handler 位于 `internal/server`，其仓储接口与 Agent Device Token 校验相互独立。Router 仅在注入 AuthHandler 时保护人类用户 API；当前没有持久化适配器，Server 启动入口不会创建或暴露 Web 登录状态。
+本地人类用户的密码和服务端 Session 逻辑位于 `internal/auth`，HTTP 认证 Handler 位于 `internal/server`，其仓储接口与 Agent Device Token 校验相互独立。SQLite 适配器位于 `internal/storage`。`cmd/server` 只有在显式提供完整 HTTPS Origin、Session、限速、历史预算和存储参数时才注入 AuthHandler；启用后保护人类用户 API，并装配现有内建指标的当前值与历史查询。
 
 `cmd/server` 只负责读取启动参数、构造当前实现并启动 HTTP Server；稳定 API 路径由 `internal/server.NewRouter` 装配。插件控制 Handler 可作为可选依赖显式传入 Router，但当前启动入口尚未构造或挂载它，因为期望状态没有已批准的持久化/管理写入实现。这个边界避免把一个无状态的内存 Registry 暴露成可用控制平面。
 

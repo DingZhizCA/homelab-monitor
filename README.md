@@ -110,9 +110,11 @@ Server 可通过 `--tls-cert`、`--tls-key` 启用 HTTPS，并通过 `--agent-cr
 
 持久化批量指标入口默认关闭。启用时必须同时显式提供 `--storage-dir`、`--metrics-batch-max-snapshots` 和 `--metrics-batch-max-body-bytes`，并配置上述 HTTPS 与逐设备凭据。`--storage-dir` 必须是 Alienware 本地 SSD 上仅 Owner 可访问的目录；程序会在其中创建 `core.db` 和 `metrics.db`，不会自行选择容量、批次或保留期限默认值。
 
+人类用户认证和指标查询也默认关闭。启用时必须提供 `--storage-dir`、至少一个 `--auth-origin`，以及正值的 `--auth-session-ttl`、`--auth-login-max-keys`、`--auth-login-max-attempts`、`--auth-login-window`、`--history-max-range` 和 `--history-max-points`；同时必须配置 HTTPS。参数不完整时 Server 拒绝启动，不会采用隐式 TTL、限速或历史查询预算。启用后，Owner 与 Viewer 均可读取现有内建当前值和历史指标；账户变更和主动磁盘刷新仍要求 Owner。
+
 Agent 插件控制循环默认关闭。启用前必须显式配置插件公钥、权限 grant 文件、私有 staging/runtime 目录、协议版本、单制品大小上限、独立控制轮询间隔和操作超时；该循环与指标采样周期独立。当前 Server 可执行文件尚未装配插件期望状态/制品路由，因此仅配置 Agent 端不足以启用插件分发。
 
-Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设备 Token，并显式设置队列条数、队列字节数、单批条数与请求体字节上限。队列仅驻留内存，失败时保留 pending 批次供后续采样轮次重试，容量满则拒绝新样本；它不会提高采样频率。Server 按上一段要求显式配置后会挂载持久化批量路由；历史查询映射、配额和保留策略仍未实施。
+Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设备 Token，并显式设置队列条数、队列字节数、单批条数与请求体字节上限。队列仅驻留内存，失败时保留 pending 批次供后续采样轮次重试，容量满则拒绝新样本；它不会提高采样频率。Server 按上一段要求显式配置后会挂载持久化批量路由；配额、保留和聚合策略仍未实施。
 
 ## API
 
@@ -127,7 +129,10 @@ Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设�
 | `POST` | `/api/v1/presence` | 可见 Dashboard 心跳 |
 | `POST` | `/api/v1/devices/{device_id}/refresh` | 排队一次主动磁盘刷新 |
 | `GET` | `/api/v1/refresh/{request_id}` | 查询刷新任务状态 |
-| `GET` | `/api/v1/dashboard/metrics/history` | 可选：在显式装配历史源、认证、授权和查询预算后读取有界历史指标 |
+| `POST/GET` | `/api/v1/auth/*` | 可选：首次 Owner、登录、Session、注销和 Owner 账户管理 |
+| `GET` | `/api/v1/dashboard/metrics/descriptors` | 可选：读取内建指标描述符 |
+| `GET` | `/api/v1/dashboard/metrics/latest` | 可选：读取 Server 内存中的最新指标 |
+| `GET` | `/api/v1/dashboard/metrics/history` | 可选：显式启用认证和历史预算后读取 SQLite 中的有界历史指标 |
 | `GET/PUT` | `/api/v1/owner/alert-rules` | 可选：装配认证和规则仓储后由 Owner 列出或按 CAS 保存规则 |
 | `GET/POST` | `/api/v1/owner/alert-rules/revisions` | 可选：由 Owner 查询不可变规则历史或以新 Revision 回滚 |
 
