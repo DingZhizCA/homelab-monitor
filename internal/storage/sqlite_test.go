@@ -167,7 +167,7 @@ func TestApplyMigrationsRejectsChangedHistoryAndInvalidOrdering(t *testing.T) {
 func assertSQLiteSettings(t *testing.T, database *sql.DB, wantJournal string, wantSynchronous int) {
 	t.Helper()
 	var journal string
-	var synchronous, foreignKeys int
+	var synchronous, foreignKeys, autoCheckpoint int
 	if err := database.QueryRow(`PRAGMA journal_mode`).Scan(&journal); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,35 @@ func assertSQLiteSettings(t *testing.T, database *sql.DB, wantJournal string, wa
 	if err := database.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
 		t.Fatal(err)
 	}
-	if journal != wantJournal || synchronous != wantSynchronous || foreignKeys != 1 {
-		t.Fatalf("journal=%s synchronous=%d foreign_keys=%d", journal, synchronous, foreignKeys)
+	if err := database.QueryRow(`PRAGMA wal_autocheckpoint`).Scan(&autoCheckpoint); err != nil {
+		t.Fatal(err)
+	}
+	if journal != wantJournal || synchronous != wantSynchronous || foreignKeys != 1 || autoCheckpoint != 0 {
+		t.Fatalf("journal=%s synchronous=%d foreign_keys=%d wal_autocheckpoint=%d", journal, synchronous, foreignKeys, autoCheckpoint)
+	}
+}
+
+func TestSQLiteDriverDisablesAutoCheckpointOnEveryPooledConnection(t *testing.T) {
+	databases := openTestDatabases(t)
+	databases.Metrics.SetMaxOpenConns(4)
+	connections := make([]*sql.Conn, 0, 4)
+	defer func() {
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+	}()
+	for range 4 {
+		connection, err := databases.Metrics.Conn(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		connections = append(connections, connection)
+		var autoCheckpoint int
+		if err := connection.QueryRowContext(context.Background(), `PRAGMA wal_autocheckpoint`).Scan(&autoCheckpoint); err != nil {
+			t.Fatal(err)
+		}
+		if autoCheckpoint != 0 {
+			t.Fatalf("connection %d wal_autocheckpoint=%d", len(connections), autoCheckpoint)
+		}
 	}
 }

@@ -16,10 +16,17 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 )
 
-const sqliteDriver = "sqlite3"
+const sqliteDriver = "homelab-monitor-sqlite3"
+
+func init() {
+	sql.Register(sqliteDriver, &sqlite3.SQLiteDriver{ConnectHook: func(connection *sqlite3.SQLiteConn) error {
+		_, err := connection.Exec("PRAGMA wal_autocheckpoint=0", nil)
+		return err
+	}})
+}
 
 // Databases is the Server's isolated pair of control-plane and metric stores.
 type Databases struct {
@@ -107,7 +114,7 @@ func openSQLite(ctx context.Context, path, synchronous string) (*sql.DB, error) 
 
 func verifySettings(ctx context.Context, database *sql.DB, synchronous string) error {
 	var journalMode, actualSynchronous string
-	var foreignKeys int
+	var foreignKeys, autoCheckpoint int
 	if err := database.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
 		return fmt.Errorf("read journal mode: %w", err)
 	}
@@ -117,9 +124,12 @@ func verifySettings(ctx context.Context, database *sql.DB, synchronous string) e
 	if err := database.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
 		return fmt.Errorf("read foreign-key mode: %w", err)
 	}
+	if err := database.QueryRowContext(ctx, "PRAGMA wal_autocheckpoint").Scan(&autoCheckpoint); err != nil {
+		return fmt.Errorf("read WAL auto-checkpoint mode: %w", err)
+	}
 	expectedSynchronous := map[string]string{"FULL": "2", "NORMAL": "1"}[synchronous]
-	if journalMode != "wal" || actualSynchronous != expectedSynchronous || foreignKeys != 1 {
-		return fmt.Errorf("unexpected SQLite settings: journal_mode=%s synchronous=%s foreign_keys=%d", journalMode, actualSynchronous, foreignKeys)
+	if journalMode != "wal" || actualSynchronous != expectedSynchronous || foreignKeys != 1 || autoCheckpoint != 0 {
+		return fmt.Errorf("unexpected SQLite settings: journal_mode=%s synchronous=%s foreign_keys=%d wal_autocheckpoint=%d", journalMode, actualSynchronous, foreignKeys, autoCheckpoint)
 	}
 	return nil
 }

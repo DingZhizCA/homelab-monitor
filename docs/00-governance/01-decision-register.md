@@ -30,6 +30,7 @@
 | ADR-018 | 通知 | Web 站内通知 + PWA Web Push；Critical/Warning 默认推送 | 已确认 |
 | ADR-019 | Server 持久化 | `mattn/go-sqlite3`；Alienware 本地 SSD 上使用 `core.db` 与 `metrics.db` 两个 WAL 文件；`core.db` 使用 `synchronous=FULL`，`metrics.db` 使用 `synchronous=NORMAL` | 2026-10-22 已确认 |
 | ADR-020 | 指标读取授权与配置 | Owner 与 Viewer 均可读取现有内建当前/历史指标；Server 认证、限速和历史预算通过无默认值的显式 CLI 参数启用 | 2026-10-22 已确认 |
+| ADR-021 | SQLite WAL checkpoint | 关闭每个连接的隐式 auto-checkpoint；Server 采用显式周期、WAL 字节阈值和单次超时驱动 PASSIVE checkpoint，正常退出前再尝试一次并记录结果 | 2026-10-22 已确认 |
 
 ## 根据「全部按推荐」授权纳入基线、尚未逐项单独确认
 | ID | 领域 | 推荐基线 | 状态 |

@@ -45,6 +45,9 @@ func run() error {
 	tlsKey := flag.String("tls-key", "", "TLS private key for HTTPS (both TLS flags are required together)")
 	agentCredentials := flag.String("agent-credentials", "", "private JSON file containing per-device token SHA-256 verifiers")
 	storageDirectory := flag.String("storage-dir", "", "private local SSD directory for core.db and metrics.db (disabled when empty)")
+	checkpointInterval := flag.Duration("storage-checkpoint-interval", 0, "interval between WAL checkpoint inspections")
+	checkpointWALBytes := flag.Int64("storage-checkpoint-wal-bytes", 0, "WAL size that triggers a passive checkpoint")
+	checkpointTimeout := flag.Duration("storage-checkpoint-timeout", 0, "timeout for each passive WAL checkpoint")
 	metricMaxSnapshots := flag.Int("metrics-batch-max-snapshots", 0, "maximum snapshots accepted in one persisted Agent batch")
 	metricMaxBodyBytes := flag.Int64("metrics-batch-max-body-bytes", 0, "maximum encoded bytes accepted by the persisted Agent batch endpoint")
 	var authOrigins stringListFlag
@@ -104,6 +107,12 @@ func run() error {
 		}()
 		log.Printf("component=server level=INFO storage=%q msg=%q", *storageDirectory, "SQLite storage initialized")
 	}
+	checkpointManager, err := buildCheckpointRuntime(databases, checkpointRuntimeConfig{
+		interval: *checkpointInterval, walThresholdBytes: *checkpointWALBytes, timeout: *checkpointTimeout,
+	})
+	if err != nil {
+		return err
+	}
 	store := server.NewStore()
 	restored, err := restoreMetricCurrentState(context.Background(), databases, store)
 	if err != nil {
@@ -162,6 +171,19 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if checkpointManager != nil {
+		checkpointContext, cancelCheckpoint := context.WithCancel(ctx)
+		checkpointDone := make(chan struct{})
+		go func() {
+			checkpointManager.Run(checkpointContext)
+			close(checkpointDone)
+		}()
+		defer func() {
+			cancelCheckpoint()
+			<-checkpointDone
+			checkpointManager.CheckpointAll(context.Background())
+		}()
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

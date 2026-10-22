@@ -1,6 +1,7 @@
 /*
-Package main assembles optional persistence, human authentication, and metric
-query runtimes from explicit Server command-line configuration.
+Package main assembles optional persistence, WAL maintenance, human
+authentication, and metric query runtimes from explicit Server command-line
+configuration.
 
 Each feature remains disabled when all of its settings are absent. Partial
 configuration fails before the HTTP listener starts.
@@ -10,6 +11,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -35,6 +37,16 @@ func (f *stringListFlag) Set(value string) error {
 type metricBatchRuntimeConfig struct {
 	maxSnapshots int
 	maxBodyBytes int64
+}
+
+type checkpointRuntimeConfig struct {
+	interval          time.Duration
+	walThresholdBytes int64
+	timeout           time.Duration
+}
+
+func (c checkpointRuntimeConfig) disabled() bool {
+	return c.interval == 0 && c.walThresholdBytes == 0 && c.timeout == 0
 }
 
 func (c metricBatchRuntimeConfig) disabled() bool {
@@ -89,6 +101,29 @@ func openServerStorage(ctx context.Context, directory string) (*storage.Database
 		return nil, nil
 	}
 	return storage.Open(ctx, directory)
+}
+
+func buildCheckpointRuntime(databases *storage.Databases, config checkpointRuntimeConfig) (*storage.CheckpointManager, error) {
+	if databases == nil {
+		if config.disabled() {
+			return nil, nil
+		}
+		return nil, errors.New("storage-dir and all positive checkpoint settings are required together")
+	}
+	if config.interval <= 0 || config.walThresholdBytes < 1 || config.timeout <= 0 {
+		return nil, errors.New("storage-dir and all positive checkpoint settings are required together")
+	}
+	return storage.NewCheckpointManager(databases, storage.CheckpointConfig{
+		Interval: config.interval, WALThresholdBytes: config.walThresholdBytes, Timeout: config.timeout,
+	}, logCheckpointObservation)
+}
+
+func logCheckpointObservation(observation storage.CheckpointObservation) {
+	if observation.Err != nil {
+		log.Printf("component=storage level=ERROR database=%q reason=%q wal_bytes=%d duration=%q msg=%q", observation.Database, observation.Reason, observation.WALBytes, observation.Duration, observation.Err)
+		return
+	}
+	log.Printf("component=storage level=INFO database=%q reason=%q wal_bytes=%d busy=%d log_frames=%d checkpointed_frames=%d duration=%q msg=%q", observation.Database, observation.Reason, observation.WALBytes, observation.Busy, observation.LogFrames, observation.CheckpointedFrames, observation.Duration, "passive WAL checkpoint completed")
 }
 
 func restoreMetricCurrentState(ctx context.Context, databases *storage.Databases, store *server.Store) (int, error) {

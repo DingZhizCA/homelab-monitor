@@ -39,6 +39,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if runtime, err := buildPluginRuntime(nil, nil, nil, pluginRuntimeConfig{}); err != nil || runtime != nil {
 		t.Fatalf("disabled plugin runtime=%v err=%v", runtime, err)
 	}
+	if manager, err := buildCheckpointRuntime(nil, checkpointRuntimeConfig{}); err != nil || manager != nil {
+		t.Fatalf("disabled checkpoint manager=%v err=%v", manager, err)
+	}
 	for _, config := range []metricBatchRuntimeConfig{{maxSnapshots: 1}, {maxBodyBytes: 1024}} {
 		if handler, err := buildMetricBatchRuntime(nil, nil, config); err == nil || handler != nil {
 			t.Fatalf("partial metric config %+v handler=%v err=%v", config, handler, err)
@@ -50,6 +53,26 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	}
 	if runtime, err := buildPluginRuntime(nil, nil, nil, pluginRuntimeConfig{artifactDirectory: "/private/plugins"}); err == nil || runtime != nil {
 		t.Fatalf("partial plugin runtime=%v err=%v", runtime, err)
+	}
+	if manager, err := buildCheckpointRuntime(nil, checkpointRuntimeConfig{interval: time.Second}); err == nil || manager != nil {
+		t.Fatalf("partial checkpoint manager=%v err=%v", manager, err)
+	}
+}
+
+func TestBuildCheckpointRuntimeRequiresCompletePolicyForStorage(t *testing.T) {
+	databases, err := openServerStorage(context.Background(), filepath.Join(testutil.TempDir(t), "storage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = databases.Close() })
+	if manager, err := buildCheckpointRuntime(databases, checkpointRuntimeConfig{}); err == nil || manager != nil {
+		t.Fatalf("implicit checkpoint manager=%v err=%v", manager, err)
+	}
+	manager, err := buildCheckpointRuntime(databases, checkpointRuntimeConfig{
+		interval: time.Second, walThresholdBytes: 4096, timeout: time.Second,
+	})
+	if err != nil || manager == nil {
+		t.Fatalf("checkpoint manager=%v err=%v", manager, err)
 	}
 }
 
