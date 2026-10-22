@@ -22,6 +22,7 @@ type RouterOptions struct {
 	MetricQueries   *MetricQueryHandler
 	MetricHistory   *MetricHistoryHandler
 	MetricsBatch    *MetricsBatchHandler
+	AlertRules      *AlertRuleHandler
 	WebDirectory    string
 }
 
@@ -44,6 +45,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.MetricsBatch != nil && (options.MetricsBatch.api != options.API || options.API.devices == nil) {
 		return nil, errors.New("metric batch route requires the matching device-authenticated Agent API")
+	}
+	if options.AlertRules != nil && (options.Auth == nil || options.AlertRules.auth != options.Auth) {
+		return nil, errors.New("alert-rule routes require the matching human authentication handler")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", options.API.Health)
@@ -87,6 +91,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.MetricHistory != nil {
 		mux.HandleFunc("/api/v1/dashboard/metrics/history", options.MetricHistory.History)
+	}
+	if options.AlertRules != nil {
+		mux.Handle("/api/v1/owner/alert-rules", options.Auth.RequireOwner(http.HandlerFunc(options.AlertRules.Collection)))
 	}
 	if options.WebDirectory != "" {
 		mux.Handle("/", NewSPAHandler(options.WebDirectory))

@@ -70,7 +70,7 @@ func (s *RuleService) SaveRevision(ctx context.Context, actor auth.Principal, ru
 		return err
 	}
 	if err := rule.Validate(s.registry, s.limits); err != nil {
-		return fmt.Errorf("invalid alert rule: %w", err)
+		return fmt.Errorf("%w: %v", ErrInvalidRuleRequest, err)
 	}
 	event, err := audit.NewEvent(time.Now(), actor.UserID, RuleAuditAction, RuleAuditResourceType, RuleAuditResourceID(rule))
 	if err != nil {

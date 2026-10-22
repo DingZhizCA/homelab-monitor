@@ -68,7 +68,7 @@
 
 ## 当前仓库整合说明
 
-本交付包是将 `docs/` 下列目录**新增**到现有 Git 仓库使用的规划资料。原有 `docs/collector-design.md`、`docs/comment-guidelines.md`、`docs/phase-1-spec.md`、`docs/systemd-deployment-guide.md` 及根目录 `AGENTS.md` 不在此包内，解压时不应删除或覆盖这些旧文档；需要在实现阶段核对并更新其适用性。
+分层架构文档与仓库原有基线文档共同维护。`docs/collector-design.md` 保留采集算法和 HDD 约束，`docs/comment-guidelines.md` 是 `AGENTS.md` 引用的代码规范，`docs/phase-1-spec.md` 记录既有运行协议基线，`docs/systemd-deployment-guide.md` 记录已验收部署状态；架构演进不得静默删除或覆盖这些资料。新旧说明冲突时先查决策台账，并在实施路线中明确当前代码状态。
 
 ## 边界声明
 
