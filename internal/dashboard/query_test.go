@@ -53,6 +53,22 @@ func TestMetricRegistryListsStableDescriptorsAndCopiesDimensions(t *testing.T) {
 	}
 }
 
+func TestMetricRegistryExtractsApprovedPointsWithoutExposingExtractorMap(t *testing.T) {
+	registry := NewMetricRegistry()
+	points, err := registry.Extract("network.rx_bytes_per_second", metrics.MetricEnvelope{
+		Networks: []metrics.NetworkMetrics{{Interface: "eth0", RXBytesPerSecond: 12.5}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(points) != 1 || points[0].Value == nil || *points[0].Value != 12.5 || points[0].Dimensions["interface"] != "eth0" {
+		t.Fatalf("points=%+v", points)
+	}
+	if _, err := registry.Extract("unsupported", metrics.MetricEnvelope{}); !errors.Is(err, ErrUnsupportedMetric) {
+		t.Fatalf("unsupported extract error=%v", err)
+	}
+}
+
 func TestQueryLatestAuthorizesBeforeReadingAndPreservesMissingAndStaleQuality(t *testing.T) {
 	source := &snapshotSourceFake{found: true, snapshot: Snapshot{
 		Envelope: metrics.MetricEnvelope{

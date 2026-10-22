@@ -103,6 +103,19 @@ func (r *MetricRegistry) Lookup(id string) (MetricDescriptor, bool) {
 	return descriptor, ok
 }
 
+// Extract maps one validated protocol envelope to an approved descriptor's points.
+func (r *MetricRegistry) Extract(id string, envelope metrics.MetricEnvelope) ([]MetricPoint, error) {
+	descriptor, ok := r.Lookup(id)
+	if !ok {
+		return nil, ErrUnsupportedMetric
+	}
+	points := r.extractors[id](envelope)
+	if err := validateMetricPoints(points, descriptor); err != nil {
+		return nil, err
+	}
+	return points, nil
+}
+
 type QueryService struct {
 	source     SnapshotSource
 	authorizer MetricAuthorizer
@@ -140,8 +153,8 @@ func (s *QueryService) QueryLatest(ctx context.Context, actor auth.Principal, de
 	if snapshot.Envelope.Device.ID != deviceID {
 		return MetricResult{}, ErrInvalidMetricSnapshot
 	}
-	points := s.registry.extractors[descriptorID](snapshot.Envelope)
-	if err := validateMetricPoints(points, descriptor); err != nil {
+	points, err := s.registry.Extract(descriptorID, snapshot.Envelope)
+	if err != nil {
 		return MetricResult{}, fmt.Errorf("%w: %v", ErrInvalidMetricSnapshot, err)
 	}
 	for index := range points {
