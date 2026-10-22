@@ -98,6 +98,26 @@ var coreMigrations = []Migration{
 	);
 	CREATE INDEX dashboard_published_revisions ON dashboard_revisions (dashboard_id, published, revision DESC);`,
 	},
+	{
+		Version: 4,
+		Name:    "alert_rule_revisions",
+		SQL: `CREATE TABLE alert_rules (
+		device_id TEXT NOT NULL,
+		rule_id TEXT NOT NULL,
+		current_revision INTEGER NOT NULL CHECK (current_revision > 0),
+		PRIMARY KEY (device_id, rule_id)
+	);
+	CREATE INDEX alert_rules_device ON alert_rules (device_id, rule_id);
+	CREATE TABLE alert_rule_revisions (
+		device_id TEXT NOT NULL,
+		rule_id TEXT NOT NULL,
+		revision INTEGER NOT NULL CHECK (revision > 0),
+		rule_json BLOB NOT NULL,
+		PRIMARY KEY (device_id, rule_id, revision),
+		FOREIGN KEY (device_id, rule_id) REFERENCES alert_rules(device_id, rule_id) ON DELETE CASCADE
+	);
+	CREATE INDEX alert_rule_history ON alert_rule_revisions (device_id, rule_id, revision DESC);`,
+	},
 }
 
 // AuthRepository implements the auth user and session persistence boundaries.

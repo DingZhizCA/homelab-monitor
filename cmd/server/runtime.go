@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
 	"github.com/DingZhizCA/homelab-monitor/internal/auth"
 	"github.com/DingZhizCA/homelab-monitor/internal/dashboard"
 	"github.com/DingZhizCA/homelab-monitor/internal/plugins"
@@ -103,6 +104,16 @@ type dashboardRuntimeConfig struct {
 }
 
 func (c dashboardRuntimeConfig) disabled() bool { return c.maxBodyBytes == 0 }
+
+type alertRuleRuntimeConfig struct {
+	maxBodyBytes  int64
+	maxDepth      int
+	maxConditions int
+}
+
+func (c alertRuleRuntimeConfig) disabled() bool {
+	return c.maxBodyBytes == 0 && c.maxDepth == 0 && c.maxConditions == 0
+}
 
 type pluginRuntimeConfig struct {
 	artifactDirectory string
@@ -335,6 +346,25 @@ func buildDashboardRuntime(databases *storage.Databases, humanAuth *authRuntime,
 		return nil, err
 	}
 	return server.NewDashboardHandler(service, humanAuth.handler, config.maxBodyBytes)
+}
+
+func buildAlertRuleRuntime(databases *storage.Databases, humanAuth *authRuntime, config alertRuleRuntimeConfig) (*server.AlertRuleHandler, error) {
+	if config.disabled() {
+		return nil, nil
+	}
+	if databases == nil || humanAuth == nil || humanAuth.handler == nil || humanAuth.registry == nil || config.maxBodyBytes < 1 || config.maxDepth < 1 || config.maxConditions < 1 {
+		return nil, errors.New("storage, human authentication, and positive alert-rule request and expression limits are required together")
+	}
+	limits := alerts.Limits{MaxDepth: config.maxDepth, MaxConditions: config.maxConditions}
+	repository, err := storage.NewAlertRuleRepository(databases.Core, humanAuth.registry, limits)
+	if err != nil {
+		return nil, err
+	}
+	service, err := alerts.NewRuleService(repository, humanAuth.registry, limits)
+	if err != nil {
+		return nil, err
+	}
+	return server.NewAlertRuleHandler(service, humanAuth.handler, config.maxBodyBytes)
 }
 
 func buildPluginRuntime(databases *storage.Databases, devices server.DeviceAuthorizer, humanAuth *authRuntime, config pluginRuntimeConfig) (*pluginRuntime, error) {

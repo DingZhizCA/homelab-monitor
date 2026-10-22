@@ -39,6 +39,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if handler, err := buildDashboardRuntime(nil, nil, dashboardRuntimeConfig{}); err != nil || handler != nil {
 		t.Fatalf("disabled Dashboard handler=%v err=%v", handler, err)
 	}
+	if handler, err := buildAlertRuleRuntime(nil, nil, alertRuleRuntimeConfig{}); err != nil || handler != nil {
+		t.Fatalf("disabled alert-rule handler=%v err=%v", handler, err)
+	}
 	if runtime, err := buildPluginRuntime(nil, nil, nil, pluginRuntimeConfig{}); err != nil || runtime != nil {
 		t.Fatalf("disabled plugin runtime=%v err=%v", runtime, err)
 	}
@@ -62,6 +65,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	}
 	if handler, err := buildDashboardRuntime(nil, nil, dashboardRuntimeConfig{maxBodyBytes: 1024}); err == nil || handler != nil {
 		t.Fatalf("partial Dashboard handler=%v err=%v", handler, err)
+	}
+	if handler, err := buildAlertRuleRuntime(nil, nil, alertRuleRuntimeConfig{maxBodyBytes: 1024}); err == nil || handler != nil {
+		t.Fatalf("partial alert-rule handler=%v err=%v", handler, err)
 	}
 	if runtime, err := buildPluginRuntime(nil, nil, nil, pluginRuntimeConfig{artifactDirectory: "/private/plugins"}); err == nil || runtime != nil {
 		t.Fatalf("partial plugin runtime=%v err=%v", runtime, err)
@@ -225,6 +231,10 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	alertRuleHandler, err := buildAlertRuleRuntime(databases, humanAuth, alertRuleRuntimeConfig{maxBodyBytes: 1 << 20, maxDepth: 4, maxConditions: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
 	artifactDirectory := filepath.Join(testutil.TempDir(t), "artifacts")
 	if err := os.Mkdir(artifactDirectory, 0o700); err != nil {
 		t.Fatal(err)
@@ -258,7 +268,7 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	t.Cleanup(func() { _ = pluginsRuntime.Close() })
 	router, err := server.NewRouter(server.RouterOptions{
 		API: api, MetricsBatch: metricsBatch, Auth: humanAuth.handler,
-		Dashboards: dashboardHandler, MetricQueries: humanAuth.queries, MetricHistory: humanAuth.history,
+		Dashboards: dashboardHandler, AlertRules: alertRuleHandler, MetricQueries: humanAuth.queries, MetricHistory: humanAuth.history,
 		PluginControl: pluginsRuntime.control, PluginArtifacts: pluginsRuntime.artifacts, PluginAdmin: pluginsRuntime.admin,
 	})
 	if err != nil {
@@ -301,6 +311,13 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"scope":"shared"`) {
 		t.Fatalf("Dashboard create status=%d body=%s", response.Code, response.Body.String())
+	}
+	request = authenticatedMutationRequest(http.MethodPut, "/api/v1/owner/alert-rules", `{"expected_current":0,"rule":{"id":"high-cpu","device_id":"node-a","revision":1,"severity":"warning","enabled":true,"expression":{"metric":{"descriptor_id":"cpu.usage_percent","operator":"gt","threshold":80,"unit":"percent"}}}}`)
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("alert-rule save status=%d body=%s", response.Code, response.Body.String())
 	}
 
 	for _, path := range []string{

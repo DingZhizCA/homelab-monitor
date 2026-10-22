@@ -19,7 +19,7 @@ Web 仅通过家庭 LAN 与 Tailnet 访问，不直接暴露公网。局域网�
 
 当前 `internal/auth` 提供 Argon2id 密码 verifier、Owner 原子初始化入口、Owner 创建账户、登录、当前角色解析和服务端 Session 撤销服务；Session 只向浏览器返回随机 Token，仓储仅接收 SHA-256 Token 摘要。未知或禁用账户的登录路径会执行同成本 dummy verifier；账户管理会复查调用者当前角色，禁用账户被解析时撤销其所有 Session。密码哈希使用随机盐 16 bytes、输出 32 bytes，成本参数为 19 MiB / 2 passes / parallelism 1，并严格拒绝其他 PHC 成本参数。该值达到 [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) 的最低推荐基线；尚未在目标 Server 上压测。`internal/server.AuthHandler` 提供 HTTPS bootstrap/login/session/logout/user-create 路由；写操作校验显式允许的 Origin，Session Cookie 设为 Secure、HttpOnly、SameSite=Lax。登录限速器使用有界固定窗口实现，尝试数、窗口和键容量必须由调用方提供。`RouterOptions.Auth` 被显式注入时，设备读取与 SSE 需要有效用户 Session，磁盘主动刷新仅 Owner 可用。
 
-Web 已有同源登录、首次 Owner 初始化和注销表单，以及 Session 检查：认证启用时，未登录页面不会请求设备 API、连接 SSE 或发送 Presence；Owner 创建后返回登录表单，登录成功后启动监控请求。Owner Session 可见的账户页调用 Owner 保护的账户创建、列表和状态修改 API，列表只返回 ID、用户名、角色和启用状态。角色或启用状态变更由用户仓储原子检查，始终保留至少一个启用 Owner；禁用账户的后续 Session 解析会拒绝并撤销其会话。若 Auth Handler 未注册，Server 返回认证 API 404，前端保持旧的无认证兼容路径。`internal/audit` 已定义不含自由文本和秘密载荷的最小管理事件；首次 Owner、账户创建、账户状态更新、插件 Desired State 发布、共享 Dashboard 管理和告警规则修订都要求对应仓储把事件与状态变更原子提交。认证中间件把已验证身份放入请求 Context。SQLite 用户/Session/账户审计和 Dashboard 仓储已经实现同事务审计、当前 Actor 复核、重开恢复、CAS 冲突及失败零写入测试；告警等其他业务域的生产审计、敏感操作再认证和 Viewer 字段级授权仍未实现。
+Web 已有同源登录、首次 Owner 初始化和注销表单，以及 Session 检查：认证启用时，未登录页面不会请求设备 API、连接 SSE 或发送 Presence；Owner 创建后返回登录表单，登录成功后启动监控请求。Owner Session 可见的账户页调用 Owner 保护的账户创建、列表和状态修改 API，列表只返回 ID、用户名、角色和启用状态。角色或启用状态变更由用户仓储原子检查，始终保留至少一个启用 Owner；禁用账户的后续 Session 解析会拒绝并撤销其会话。若 Auth Handler 未注册，Server 返回认证 API 404，前端保持旧的无认证兼容路径。`internal/audit` 已定义不含自由文本和秘密载荷的最小管理事件；首次 Owner、账户创建、账户状态更新、插件 Desired State 发布、共享 Dashboard 管理和告警规则修订都要求对应仓储把事件与状态变更原子提交。认证中间件把已验证身份放入请求 Context。SQLite 用户/Session/账户审计、Dashboard 和告警规则仓储已经实现同事务审计、当前 Actor 复核、重开恢复、CAS 冲突及失败零写入测试；Incident 等其他业务域的生产审计、敏感操作再认证和 Viewer 字段级授权仍未实现。
 
 `cmd/server` 现可在显式提供私有存储目录、至少一个 HTTPS Origin、Session TTL、登录限速键容量/次数/窗口以及历史最大范围/点数时创建并注入 AuthHandler；缺少任一参数都会拒绝启动，默认运行仍保持认证关闭。启用后设备读取、SSE、Presence、当前指标和历史指标要求有效人类 Session，主动磁盘刷新仍仅限 Owner。额外提供 Dashboard 请求体字节上限后，Server 注入 SQLite Dashboard 仓储、内建 Descriptor 发布策略和对应认证 Handler。ADR-020 允许有效 Owner 与 Viewer 读取现有内建指标，因此共享发布拒绝未知 Descriptor；查询时仍再次鉴权。更细粒度设备/字段 ACL 尚未实现。
 
@@ -40,7 +40,7 @@ TLS 强制验证 Server 身份；首版采用独立设备 Token（强随机、�
 ## 管理操作与审计
 插件安装/升级、密钥轮换、规则发布/回滚、身份合并拆分、敏感诊断开启及历史删除需审计。日志不得记录密码、Token、SSH 私钥、完整 Push Endpoint 或敏感连接载荷。
 
-审计不能由 Handler 在业务写入后另行追加，否则审计失败时状态已经不可回滚。当前账户、插件 Desired State、共享 Dashboard 和告警规则仓储契约因此要求生产适配器在同一事务内写入事件；事件只包含 UTC 时间、Actor ID、稳定 Action、资源类型和资源 ID。共享 Dashboard 创建的 ID 由仓储分配，仓储须在提交前用该 ID 调用事件工厂，并将返回事件与 Dashboard 一起提交。账户、插件 Desired State 和共享 Dashboard 已在 `core.db` 中实现该事务边界；告警规则仍只有进程内原子实现，重启后会丢失。审计事件不写入普通应用日志载荷。
+审计不能由 Handler 在业务写入后另行追加，否则审计失败时状态已经不可回滚。当前账户、插件 Desired State、共享 Dashboard 和告警规则仓储契约因此要求生产适配器在同一事务内写入事件；事件只包含 UTC 时间、Actor ID、稳定 Action、资源类型和资源 ID。共享 Dashboard 创建的 ID 由仓储分配，仓储须在提交前用该 ID 调用事件工厂，并将返回事件与 Dashboard 一起提交。账户、插件 Desired State、共享 Dashboard 和告警规则均已在 `core.db` 中实现该事务边界。审计事件不写入普通应用日志载荷。
 
 ## HTTPS 与现有服务
 LAN 提供可信 HTTPS，Tailnet 利用受控 HTTPS 入口；具体域名证书和反向代理方案待实施核对。Alienware 既有 Tailscale Serve 443 为 CouchDB 服务的配置不能被新 Web 覆盖。PWA 推送接收不要求 Web 公网入站端口。

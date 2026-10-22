@@ -68,6 +68,9 @@ func run() error {
 	historyMaxRange := flag.Duration("history-max-range", 0, "maximum time range for one historical metric query")
 	historyMaxPoints := flag.Int("history-max-points", 0, "maximum observations returned by one historical metric query")
 	dashboardMaxBodyBytes := flag.Int64("dashboard-max-body-bytes", 0, "maximum Dashboard mutation request body bytes")
+	alertRuleMaxBodyBytes := flag.Int64("alert-rule-max-body-bytes", 0, "maximum alert-rule mutation request body bytes")
+	alertRuleMaxDepth := flag.Int("alert-rule-max-depth", 0, "maximum alert-rule expression depth")
+	alertRuleMaxConditions := flag.Int("alert-rule-max-conditions", 0, "maximum metric conditions in one alert rule")
 	pluginArtifactDirectory := flag.String("plugin-artifact-dir", "", "private immutable plugin artifact repository directory")
 	pluginMaxArtifactBytes := flag.Int64("plugin-max-artifact-bytes", 0, "maximum plugin artifact bytes read or served")
 	flag.Parse()
@@ -162,6 +165,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	alertRules, err := buildAlertRuleRuntime(databases, humanAuth, alertRuleRuntimeConfig{
+		maxBodyBytes: *alertRuleMaxBodyBytes, maxDepth: *alertRuleMaxDepth, maxConditions: *alertRuleMaxConditions,
+	})
+	if err != nil {
+		return err
+	}
 	pluginsRuntime, err := buildPluginRuntime(databases, deviceAuthorizer, humanAuth, pluginRuntimeConfig{
 		artifactDirectory: *pluginArtifactDirectory,
 		maxArtifactBytes:  *pluginMaxArtifactBytes,
@@ -180,6 +189,7 @@ func run() error {
 	if humanAuth != nil {
 		options.Auth = humanAuth.handler
 		options.Dashboards = dashboards
+		options.AlertRules = alertRules
 		options.MetricQueries = humanAuth.queries
 		options.MetricHistory = humanAuth.history
 	}

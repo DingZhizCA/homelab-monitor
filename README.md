@@ -112,6 +112,8 @@ Server 可通过 `--tls-cert`、`--tls-key` 启用 HTTPS，并通过 `--agent-cr
 
 人类用户认证和指标查询也默认关闭。启用时必须提供 `--storage-dir`、至少一个 `--auth-origin`，以及正值的 `--auth-session-ttl`、`--auth-login-max-keys`、`--auth-login-max-attempts`、`--auth-login-window`、`--history-max-range` 和 `--history-max-points`；同时必须配置 HTTPS。参数不完整时 Server 拒绝启动，不会采用隐式 TTL、限速或历史查询预算。启用后，Owner 与 Viewer 均可读取现有内建当前值和历史指标；账户变更和主动磁盘刷新仍要求 Owner。再提供正值的 `--dashboard-max-body-bytes` 会挂载持久化 Dashboard 路由；共享草稿的创建、保存、发布、回滚和审计在 `core.db` 同一事务提交，未配置时该路由保持关闭。
 
+告警规则管理同样默认关闭。完整启用人类认证后，再显式提供正值的 `--alert-rule-max-body-bytes`、`--alert-rule-max-depth` 和 `--alert-rule-max-conditions`，Server 才会挂载 Owner 规则路由。规则 Revision、当前指针及审计事件持久化到 `core.db`；这些参数只限制请求和表达式复杂度，不提供任何隐式阈值、规则模板或 Incident 策略。
+
 Agent 插件控制循环默认关闭。启用前必须显式配置插件公钥、权限 grant 文件、私有 staging/runtime 目录、协议版本、单制品大小上限、独立控制轮询间隔和操作超时；该循环与指标采样周期独立。Server 端还必须完整启用 SQLite、人类认证、设备认证，并提供现有私有绝对路径 `--plugin-artifact-dir` 和正值 `--plugin-max-artifact-bytes`。缺少任一依赖时插件控制路由不会启动。
 
 `plugin-pack` 可用可选的 `--repository` 将刚签名且保留在 `--output` 中供审查的 bundle 原子导入 Server 制品仓库；重复导入相同字节幂等，冲突字节拒绝。导入制品不会自动创建或启用 Desired State。
@@ -138,7 +140,7 @@ Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设�
 | `GET/POST/PUT` | `/api/v1/dashboards*` | 可选：认证用户管理持久化个人 Dashboard，Owner 管理共享草稿、发布历史和回滚 |
 | `GET/POST` | `/api/v1/agent/plugins/*` | 可选：设备认证的 Desired State 拉取、Reported State 上报和制品下载 |
 | `PUT` | `/api/v1/owner/plugins/desired` | 可选：Owner 发布带原子审计的插件期望状态 |
-| `GET/PUT` | `/api/v1/owner/alert-rules` | 可选：装配认证和规则仓储后由 Owner 列出或按 CAS 保存规则 |
+| `GET/PUT` | `/api/v1/owner/alert-rules` | 可选：Owner 列出或按 CAS 保存 SQLite 持久化规则 |
 | `GET/POST` | `/api/v1/owner/alert-rules/revisions` | 可选：由 Owner 查询不可变规则历史或以新 Revision 回滚 |
 
 主动磁盘刷新可能唤醒 HDD，因此必须明确授权：
@@ -212,6 +214,7 @@ web/                  React Dashboard
 
 - 兼容单快照接口只更新内存；只有持久化批量接口写入的设备快照会在 Server 重启时恢复。刷新任务仍为进程内状态，不会恢复。
 - 持久化认证、Owner 管理、内建当前指标、原始历史查询和 Dashboard 管理必须通过完整显式参数启用；默认运行保持这些路由关闭。共享发布只允许引用当前内建 Descriptor，更细粒度设备/字段 ACL 和敏感操作再认证尚未实现。
+- 告警规则的不可变历史、回滚和审计可持久化装配；Incident、评估调度、规则删除/迁移、通知去重、静默和投递仍未接入生产运行链。
 - 插件 Desired/Reported State、审计和制品路由可由 `cmd/server` 显式装配；制品仓库尚无总配额与清理策略，Agent 回滚关联和隔离状态仍不持久。
 - Agent 的有界批量队列与插件控制均默认关闭，启用插件仍需本机信任根、权限 grant 和运行参数全部有效。
 - 原始指标已有 SQLite 持久化、显式 PASSIVE WAL checkpoint、有界时间保留清理及软硬容量保护；PASSIVE 不负责截断 WAL 文件。容量参数尚未在目标设备调优，分层聚合、空间回收、流量归属账本和完整 Incident/通知流程尚未实现。
