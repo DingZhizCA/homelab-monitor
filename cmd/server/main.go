@@ -48,6 +48,11 @@ func run() error {
 	checkpointInterval := flag.Duration("storage-checkpoint-interval", 0, "interval between WAL checkpoint inspections")
 	checkpointWALBytes := flag.Int64("storage-checkpoint-wal-bytes", 0, "WAL size that triggers a passive checkpoint")
 	checkpointTimeout := flag.Duration("storage-checkpoint-timeout", 0, "timeout for each passive WAL checkpoint")
+	retentionInterval := flag.Duration("storage-retention-interval", 0, "interval between bounded metric retention transactions")
+	rawRetention := flag.Duration("storage-raw-retention", 0, "retention window for raw metric snapshots")
+	receiptRetention := flag.Duration("storage-receipt-retention", 0, "retention window for metric batch retry receipts")
+	retentionDeleteLimit := flag.Int("storage-retention-delete-limit", 0, "maximum snapshots and receipts deleted per retention transaction")
+	retentionTimeout := flag.Duration("storage-retention-timeout", 0, "timeout for each metric retention transaction")
 	metricMaxSnapshots := flag.Int("metrics-batch-max-snapshots", 0, "maximum snapshots accepted in one persisted Agent batch")
 	metricMaxBodyBytes := flag.Int64("metrics-batch-max-body-bytes", 0, "maximum encoded bytes accepted by the persisted Agent batch endpoint")
 	var authOrigins stringListFlag
@@ -109,6 +114,13 @@ func run() error {
 	}
 	checkpointManager, err := buildCheckpointRuntime(databases, checkpointRuntimeConfig{
 		interval: *checkpointInterval, walThresholdBytes: *checkpointWALBytes, timeout: *checkpointTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	retentionManager, err := buildRetentionRuntime(databases, retentionRuntimeConfig{
+		interval: *retentionInterval, rawRetention: *rawRetention, receiptRetention: *receiptRetention,
+		deleteLimit: *retentionDeleteLimit, timeout: *retentionTimeout,
 	})
 	if err != nil {
 		return err
@@ -182,6 +194,18 @@ func run() error {
 			cancelCheckpoint()
 			<-checkpointDone
 			checkpointManager.CheckpointAll(context.Background())
+		}()
+	}
+	if retentionManager != nil {
+		retentionContext, cancelRetention := context.WithCancel(ctx)
+		retentionDone := make(chan struct{})
+		go func() {
+			retentionManager.Run(retentionContext)
+			close(retentionDone)
+		}()
+		defer func() {
+			cancelRetention()
+			<-retentionDone
 		}()
 	}
 	go func() {

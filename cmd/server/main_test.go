@@ -42,6 +42,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if manager, err := buildCheckpointRuntime(nil, checkpointRuntimeConfig{}); err != nil || manager != nil {
 		t.Fatalf("disabled checkpoint manager=%v err=%v", manager, err)
 	}
+	if manager, err := buildRetentionRuntime(nil, retentionRuntimeConfig{}); err != nil || manager != nil {
+		t.Fatalf("disabled retention manager=%v err=%v", manager, err)
+	}
 	for _, config := range []metricBatchRuntimeConfig{{maxSnapshots: 1}, {maxBodyBytes: 1024}} {
 		if handler, err := buildMetricBatchRuntime(nil, nil, config); err == nil || handler != nil {
 			t.Fatalf("partial metric config %+v handler=%v err=%v", config, handler, err)
@@ -56,6 +59,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	}
 	if manager, err := buildCheckpointRuntime(nil, checkpointRuntimeConfig{interval: time.Second}); err == nil || manager != nil {
 		t.Fatalf("partial checkpoint manager=%v err=%v", manager, err)
+	}
+	if manager, err := buildRetentionRuntime(nil, retentionRuntimeConfig{interval: time.Second}); err == nil || manager != nil {
+		t.Fatalf("partial retention manager=%v err=%v", manager, err)
 	}
 }
 
@@ -73,6 +79,24 @@ func TestBuildCheckpointRuntimeRequiresCompletePolicyForStorage(t *testing.T) {
 	})
 	if err != nil || manager == nil {
 		t.Fatalf("checkpoint manager=%v err=%v", manager, err)
+	}
+}
+
+func TestBuildRetentionRuntimeRequiresCompletePolicyForStorage(t *testing.T) {
+	databases, err := openServerStorage(context.Background(), filepath.Join(testutil.TempDir(t), "storage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = databases.Close() })
+	if manager, err := buildRetentionRuntime(databases, retentionRuntimeConfig{}); err == nil || manager != nil {
+		t.Fatalf("implicit retention manager=%v err=%v", manager, err)
+	}
+	manager, err := buildRetentionRuntime(databases, retentionRuntimeConfig{
+		interval: time.Hour, rawRetention: time.Hour, receiptRetention: 2 * time.Hour,
+		deleteLimit: 100, timeout: time.Second,
+	})
+	if err != nil || manager == nil {
+		t.Fatalf("retention manager=%v err=%v", manager, err)
 	}
 }
 

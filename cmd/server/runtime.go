@@ -45,6 +45,18 @@ type checkpointRuntimeConfig struct {
 	timeout           time.Duration
 }
 
+type retentionRuntimeConfig struct {
+	interval         time.Duration
+	rawRetention     time.Duration
+	receiptRetention time.Duration
+	deleteLimit      int
+	timeout          time.Duration
+}
+
+func (c retentionRuntimeConfig) disabled() bool {
+	return c.interval == 0 && c.rawRetention == 0 && c.receiptRetention == 0 && c.deleteLimit == 0 && c.timeout == 0
+}
+
 func (c checkpointRuntimeConfig) disabled() bool {
 	return c.interval == 0 && c.walThresholdBytes == 0 && c.timeout == 0
 }
@@ -124,6 +136,30 @@ func logCheckpointObservation(observation storage.CheckpointObservation) {
 		return
 	}
 	log.Printf("component=storage level=INFO database=%q reason=%q wal_bytes=%d busy=%d log_frames=%d checkpointed_frames=%d duration=%q msg=%q", observation.Database, observation.Reason, observation.WALBytes, observation.Busy, observation.LogFrames, observation.CheckpointedFrames, observation.Duration, "passive WAL checkpoint completed")
+}
+
+func buildRetentionRuntime(databases *storage.Databases, config retentionRuntimeConfig) (*storage.MetricRetentionManager, error) {
+	if databases == nil {
+		if config.disabled() {
+			return nil, nil
+		}
+		return nil, errors.New("storage-dir and all positive retention settings are required together")
+	}
+	if config.interval <= 0 || config.rawRetention <= 0 || config.receiptRetention <= config.rawRetention || config.deleteLimit < 1 || config.timeout <= 0 {
+		return nil, errors.New("storage-dir, positive retention settings, and a receipt window longer than the raw window are required together")
+	}
+	return storage.NewMetricRetentionManager(databases.Metrics, storage.RetentionConfig{
+		Interval: config.interval, RawRetention: config.rawRetention, ReceiptRetention: config.receiptRetention,
+		DeleteLimit: config.deleteLimit, Timeout: config.timeout,
+	}, logRetentionObservation)
+}
+
+func logRetentionObservation(observation storage.RetentionObservation) {
+	if observation.Err != nil {
+		log.Printf("component=storage level=ERROR raw_cutoff=%q receipt_cutoff=%q duration=%q msg=%q", observation.RawCutoff, observation.ReceiptCutoff, observation.Duration, observation.Err)
+		return
+	}
+	log.Printf("component=storage level=INFO raw_cutoff=%q receipt_cutoff=%q deleted_snapshots=%d deleted_receipts=%d duration=%q msg=%q", observation.RawCutoff, observation.ReceiptCutoff, observation.DeletedSnapshots, observation.DeletedReceipts, observation.Duration, "bounded metric retention completed")
 }
 
 func restoreMetricCurrentState(ctx context.Context, databases *storage.Databases, store *server.Store) (int, error) {

@@ -2,8 +2,8 @@
 Package storage persists retryable Agent metric batches in metrics.db.
 
 Each batch identity, digest, and complete set of protocol envelopes commits in
-one transaction. Retention, aggregation, and sampling policy remain outside
-this adapter.
+one transaction. A separate bounded retention manager may delete envelopes and
+later expire their retry identities without changing this writer's protocol.
 */
 package storage
 
@@ -50,7 +50,15 @@ var metricMigrations = []Migration{
 		(SELECT MAX(sampled_at) FROM metric_snapshots WHERE metric_snapshots.batch_id = metric_batches.batch_id),
 		'1970-01-01T00:00:00.000000000Z'
 	)
-	WHERE received_at = '';`,
+		WHERE received_at = '';`,
+	},
+	{
+		Version: 3,
+		Name:    "metric_retention_indexes",
+		SQL: `CREATE INDEX metric_snapshots_retention
+		ON metric_snapshots (sampled_at, batch_id, sequence);
+	CREATE INDEX metric_batches_retention
+		ON metric_batches (received_at, batch_id);`,
 	},
 }
 
