@@ -54,6 +54,10 @@ func TestMemoryRuleRepositoryStoresImmutableHistoryAndRollbackAsNewRevision(t *t
 	if listed, err := repository.ListCurrent(ctx, "node/a"); err != nil || len(listed) != 1 || listed[0].Revision != 3 {
 		t.Fatalf("current rule list=%+v err=%v", listed, err)
 	}
+	history, err := repository.ListRevisions(ctx, "node/a", "high-cpu")
+	if err != nil || len(history) != 3 || history[0].Revision != 3 || history[2].Revision != 1 {
+		t.Fatalf("rule revision history=%+v err=%v", history, err)
+	}
 }
 
 func TestMemoryRuleRepositoryCompareAndSwapIsAtomic(t *testing.T) {

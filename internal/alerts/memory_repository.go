@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	RuleAuditAction       = "alert.rule.save"
-	RuleAuditResourceType = "alert_rule"
+	RuleAuditAction         = "alert.rule.save"
+	RuleRollbackAuditAction = "alert.rule.rollback"
+	RuleAuditResourceType   = "alert_rule"
 )
 
 // RuleAuditResourceID identifies one device-scoped rule in audit records.
@@ -31,6 +32,7 @@ func RuleAuditResourceID(rule Rule) string {
 type RuleRepository interface {
 	Current(context.Context, string, string) (Rule, bool, error)
 	Revision(context.Context, string, string, uint64) (Rule, bool, error)
+	ListRevisions(context.Context, string, string) ([]Rule, error)
 	ListCurrent(context.Context, string) ([]Rule, error)
 	SaveRevisionWithAudit(context.Context, string, Rule, uint64, audit.Event) error
 }
@@ -90,6 +92,25 @@ func (r *MemoryRuleRepository) Revision(ctx context.Context, deviceID, ruleID st
 		return Rule{}, false, nil
 	}
 	return cloneRule(rule), true, nil
+}
+
+// ListRevisions returns immutable rule history in descending revision order.
+func (r *MemoryRuleRepository) ListRevisions(ctx context.Context, deviceID, ruleID string) ([]Rule, error) {
+	if err := checkRuleRepositoryContext(ctx); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	stored, ok := r.rules[ruleKey{deviceID: deviceID, ruleID: ruleID}]
+	if !ok {
+		return []Rule{}, nil
+	}
+	revisions := make([]Rule, 0, len(stored.revisions))
+	for _, rule := range stored.revisions {
+		revisions = append(revisions, cloneRule(rule))
+	}
+	sort.Slice(revisions, func(i, j int) bool { return revisions[i].Revision > revisions[j].Revision })
+	return revisions, nil
 }
 
 func (r *MemoryRuleRepository) ListCurrent(ctx context.Context, deviceID string) ([]Rule, error) {
@@ -174,7 +195,7 @@ func validateRuleAudit(event audit.Event, rule Rule) error {
 	if err := event.Validate(); err != nil {
 		return fmt.Errorf("validate alert-rule audit event: %w", err)
 	}
-	if event.Action != RuleAuditAction || event.ResourceType != RuleAuditResourceType || event.ResourceID != RuleAuditResourceID(rule) {
+	if (event.Action != RuleAuditAction && event.Action != RuleRollbackAuditAction) || event.ResourceType != RuleAuditResourceType || event.ResourceID != RuleAuditResourceID(rule) {
 		return errors.New("alert-rule audit event does not match mutation")
 	}
 	return nil

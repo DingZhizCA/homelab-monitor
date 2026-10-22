@@ -61,6 +61,17 @@ func (s *RuleService) Current(ctx context.Context, actor auth.Principal, deviceI
 	return s.repository.Current(ctx, deviceID, ruleID)
 }
 
+// ListRevisions returns immutable rule history to an authenticated Owner.
+func (s *RuleService) ListRevisions(ctx context.Context, actor auth.Principal, deviceID, ruleID string) ([]Rule, error) {
+	if err := authorizeRuleOwner(actor); err != nil {
+		return nil, err
+	}
+	if err := validateRuleIdentity(ctx, deviceID, ruleID); err != nil {
+		return nil, err
+	}
+	return s.repository.ListRevisions(ctx, deviceID, ruleID)
+}
+
 // SaveRevision records an Owner-approved rule change using an expected-current CAS value.
 func (s *RuleService) SaveRevision(ctx context.Context, actor auth.Principal, rule Rule, expectedCurrent uint64) error {
 	if err := authorizeRuleOwner(actor); err != nil {
@@ -79,6 +90,45 @@ func (s *RuleService) SaveRevision(ctx context.Context, actor auth.Principal, ru
 	return s.repository.SaveRevisionWithAudit(ctx, actor.UserID, rule, expectedCurrent, event)
 }
 
+// RollbackRevision republishes one historical rule body as an explicit new revision.
+func (s *RuleService) RollbackRevision(ctx context.Context, actor auth.Principal, deviceID, ruleID string, targetRevision, newRevision, expectedCurrent uint64) error {
+	if err := authorizeRuleOwner(actor); err != nil {
+		return err
+	}
+	if err := validateRuleIdentity(ctx, deviceID, ruleID); err != nil {
+		return err
+	}
+	if targetRevision == 0 || newRevision == 0 || expectedCurrent == 0 || newRevision <= expectedCurrent || targetRevision == expectedCurrent {
+		return fmt.Errorf("%w: rollback revisions are invalid", ErrInvalidRuleRequest)
+	}
+	target, found, err := s.repository.Revision(ctx, deviceID, ruleID, targetRevision)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrRuleNotFound
+	}
+	target.Revision = newRevision
+	if err := target.Validate(s.registry, s.limits); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRuleRequest, err)
+	}
+	event, err := audit.NewEvent(time.Now(), actor.UserID, RuleRollbackAuditAction, RuleAuditResourceType, RuleAuditResourceID(target))
+	if err != nil {
+		return fmt.Errorf("create alert-rule rollback audit event: %w", err)
+	}
+	return s.repository.SaveRevisionWithAudit(ctx, actor.UserID, target, expectedCurrent, event)
+}
+
+func validateRuleIdentity(ctx context.Context, deviceID, ruleID string) error {
+	if err := checkRuleRepositoryContext(ctx); err != nil {
+		return err
+	}
+	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID || !ruleIDPattern.MatchString(ruleID) {
+		return fmt.Errorf("%w: valid device and rule identities are required", ErrInvalidRuleRequest)
+	}
+	return nil
+}
+
 func authorizeRuleOwner(actor auth.Principal) error {
 	if strings.TrimSpace(actor.UserID) == "" || actor.Role != auth.RoleOwner {
 		return auth.ErrForbidden
@@ -87,3 +137,5 @@ func authorizeRuleOwner(actor auth.Principal) error {
 }
 
 var ErrInvalidRuleRequest = errors.New("invalid alert rule request")
+
+var ErrRuleNotFound = errors.New("alert rule not found")

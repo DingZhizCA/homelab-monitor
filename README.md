@@ -127,6 +127,7 @@ Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设�
 | `GET` | `/api/v1/refresh/{request_id}` | 查询刷新任务状态 |
 | `GET` | `/api/v1/dashboard/metrics/history` | 可选：在显式装配历史源、认证、授权和查询预算后读取有界历史指标 |
 | `GET/PUT` | `/api/v1/owner/alert-rules` | 可选：装配认证和规则仓储后由 Owner 列出或按 CAS 保存规则 |
+| `GET/POST` | `/api/v1/owner/alert-rules/revisions` | 可选：由 Owner 查询不可变规则历史或以新 Revision 回滚 |
 
 主动磁盘刷新可能唤醒 HDD，因此必须明确授权：
 

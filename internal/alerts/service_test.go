@@ -80,3 +80,44 @@ func TestRuleServiceValidatesAndPersistsOwnerRevisionWithCAS(t *testing.T) {
 		t.Fatal("Owner wrote a rule with an incompatible metric unit")
 	}
 }
+
+func TestRuleServiceListsAndRollsBackRuleHistoryAsNewRevision(t *testing.T) {
+	registry := dashboard.NewMetricRegistry()
+	limits := Limits{MaxDepth: 4, MaxConditions: 8}
+	repository, err := NewMemoryRuleRepository(registry, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewRuleService(repository, registry, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := auth.Principal{UserID: "owner-a", Role: auth.RoleOwner}
+	ctx := context.Background()
+	if err := service.SaveRevision(ctx, owner, repositoryTestRule(1, 80), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SaveRevision(ctx, owner, repositoryTestRule(2, 90), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RollbackRevision(ctx, owner, "node/a", "high-cpu", 1, 3, 2); err != nil {
+		t.Fatal(err)
+	}
+	history, err := service.ListRevisions(ctx, owner, "node/a", "high-cpu")
+	if err != nil || len(history) != 3 || history[0].Revision != 3 || history[1].Revision != 2 || history[2].Revision != 1 {
+		t.Fatalf("rule history=%+v err=%v", history, err)
+	}
+	if history[0].Expression.Metric.Threshold != 80 {
+		t.Fatalf("rollback revision did not preserve historical body: %+v", history[0])
+	}
+	events := repository.AuditEvents()
+	if len(events) != 3 || events[2].Action != RuleRollbackAuditAction {
+		t.Fatalf("rollback audit events=%+v", events)
+	}
+	if err := service.RollbackRevision(ctx, owner, "node/a", "high-cpu", 1, 4, 2); !errors.Is(err, ErrRuleVersionConflict) {
+		t.Fatalf("stale rollback error=%v", err)
+	}
+	if len(repository.AuditEvents()) != 3 {
+		t.Fatal("stale rollback appended an audit event")
+	}
+}

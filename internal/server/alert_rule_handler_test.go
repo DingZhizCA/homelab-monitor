@@ -91,6 +91,39 @@ func TestAlertRuleRouteRequiresOwnerOriginAndCAS(t *testing.T) {
 		t.Fatalf("stale save status=%d events=%+v body=%s", response.Code, rules.AuditEvents(), response.Body.String())
 	}
 
+	second := `{"expected_current":1,"rule":{"id":"high-cpu","device_id":"node/a","revision":2,"severity":"warning","enabled":true,"expression":{"metric":{"descriptor_id":"cpu.usage_percent","operator":"gt","threshold":90,"unit":"percent"}}}}`
+	request = authRequest(http.MethodPut, "https://monitor.example/api/v1/owner/alert-rules", second)
+	request.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: ownerToken})
+	request.Header.Set("Origin", testAuthOrigin)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("second rule revision status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = authRequest(http.MethodGet, "https://monitor.example/api/v1/owner/alert-rules/revisions?device_id=node%2Fa&rule_id=high-cpu", "")
+	request.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: ownerToken})
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"revision":2`) {
+		t.Fatalf("rule history status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	rollback := `{"device_id":"node/a","rule_id":"high-cpu","target_revision":1,"new_revision":3,"expected_current":2}`
+	request = authRequest(http.MethodPost, "https://monitor.example/api/v1/owner/alert-rules/revisions", rollback)
+	request.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: ownerToken})
+	request.Header.Set("Origin", testAuthOrigin)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	current, found, currentErr := rules.Current(context.Background(), "node/a", "high-cpu")
+	if response.Code != http.StatusNoContent || currentErr != nil || !found || current.Revision != 3 || current.Expression.Metric.Threshold != 80 {
+		t.Fatalf("rollback status=%d current=%+v found=%t err=%v body=%s", response.Code, current, found, currentErr, response.Body.String())
+	}
+	events := rules.AuditEvents()
+	if len(events) != 3 || events[2].Action != alerts.RuleRollbackAuditAction {
+		t.Fatalf("rollback audit events=%+v", events)
+	}
+
 	request = authRequest(http.MethodGet, "https://monitor.example/api/v1/owner/alert-rules?device_id=node%2Fa", "")
 	request.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: viewerToken})
 	response = httptest.NewRecorder()

@@ -94,6 +94,7 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.AlertRules != nil {
 		mux.Handle("/api/v1/owner/alert-rules", options.Auth.RequireOwner(http.HandlerFunc(options.AlertRules.Collection)))
+		mux.Handle("/api/v1/owner/alert-rules/revisions", options.Auth.RequireOwner(http.HandlerFunc(options.AlertRules.Revisions)))
 	}
 	if options.WebDirectory != "" {
 		mux.Handle("/", NewSPAHandler(options.WebDirectory))
