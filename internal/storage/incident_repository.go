@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
@@ -50,7 +49,7 @@ func (r *IncidentRepository) Current(ctx context.Context, deviceID, ruleID strin
 }
 
 func (r *IncidentRepository) ListCurrent(ctx context.Context, deviceID string) ([]alerts.IncidentState, error) {
-	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID {
+	if err := alerts.ValidateIncidentDeviceID(deviceID); err != nil {
 		return nil, alerts.ErrIncidentIdentity
 	}
 	rows, err := r.database.QueryContext(ctx, `SELECT state_json FROM incident_states WHERE device_id = ? ORDER BY rule_id`, deviceID)
@@ -161,8 +160,5 @@ func decodeIncidentState(encoded []byte) (alerts.IncidentState, error) {
 }
 
 func validateIncidentIdentity(deviceID, ruleID string) error {
-	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID || strings.TrimSpace(ruleID) == "" || strings.TrimSpace(ruleID) != ruleID {
-		return alerts.ErrIncidentIdentity
-	}
-	return nil
+	return alerts.ValidateIncidentIdentity(deviceID, ruleID)
 }

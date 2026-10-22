@@ -129,8 +129,5 @@ func validateIncidentRepositoryRequest(ctx context.Context, deviceID, ruleID str
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID || !ruleIDPattern.MatchString(ruleID) {
-		return ErrIncidentIdentity
-	}
-	return nil
+	return ValidateIncidentIdentity(deviceID, ruleID)
 }

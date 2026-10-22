@@ -48,6 +48,19 @@ func TestAlertRuleRepositoryPersistsHistoryAuditAndIdempotentRetries(t *testing.
 	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE resource_type = ?`, alerts.RuleAuditResourceType).Scan(&events); err != nil || events != 2 {
 		t.Fatalf("events=%d err=%v", events, err)
 	}
+	other := v1
+	other.ID, other.DeviceID = "low-memory", "node/b"
+	if err := repository.SaveRevisionWithAudit(context.Background(), ownerID, other, 0, storedRuleAudit(t, ownerID, alerts.RuleAuditAction, other)); err != nil {
+		t.Fatal(err)
+	}
+	page, err := repository.ListEvaluationPage(context.Background(), "", "", 1)
+	if err != nil || len(page) != 1 || page[0].DeviceID != "node/a" {
+		t.Fatalf("first evaluation page=%+v err=%v", page, err)
+	}
+	page, err = repository.ListEvaluationPage(context.Background(), page[0].DeviceID, page[0].ID, 1)
+	if err != nil || len(page) != 1 || page[0].DeviceID != "node/b" {
+		t.Fatalf("second evaluation page=%+v err=%v", page, err)
+	}
 }
 
 func TestAlertRuleRepositoryCASAndOwnerCheckAreAtomic(t *testing.T) {

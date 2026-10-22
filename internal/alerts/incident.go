@@ -127,6 +127,28 @@ func validateIncidentPolicy(policy IncidentPolicy) error {
 	return nil
 }
 
+// ValidateIncidentPolicy verifies caller-selected transition behavior without
+// creating or changing Incident state.
+func ValidateIncidentPolicy(policy IncidentPolicy) error {
+	return validateIncidentPolicy(policy)
+}
+
+// ValidateIncidentIdentity verifies the stable key shared by rules and states.
+func ValidateIncidentIdentity(deviceID, ruleID string) error {
+	if err := ValidateIncidentDeviceID(deviceID); err != nil || !ruleIDPattern.MatchString(ruleID) {
+		return ErrIncidentIdentity
+	}
+	return nil
+}
+
+// ValidateIncidentDeviceID verifies a device-scoped list key.
+func ValidateIncidentDeviceID(deviceID string) error {
+	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID {
+		return ErrIncidentIdentity
+	}
+	return nil
+}
+
 func validUncertainBehavior(behavior UncertainBehavior) bool {
 	switch behavior {
 	case UncertainHold, UncertainResetPending, UncertainResolve:

@@ -68,6 +68,17 @@ func (r *AlertRuleRepository) ListCurrent(ctx context.Context, deviceID string) 
 		WHERE current.device_id = ? ORDER BY current.rule_id`, deviceID)
 }
 
+// ListEvaluationPage returns a stable global page after a device/rule cursor.
+func (r *AlertRuleRepository) ListEvaluationPage(ctx context.Context, afterDeviceID, afterRuleID string, limit int) ([]alerts.Rule, error) {
+	if limit < 1 || (afterDeviceID == "" && afterRuleID != "") {
+		return nil, errors.New("valid alert evaluation cursor and positive limit are required")
+	}
+	return r.list(ctx, `SELECT revision.rule_json FROM alert_rules current
+		JOIN alert_rule_revisions revision ON revision.device_id = current.device_id AND revision.rule_id = current.rule_id AND revision.revision = current.current_revision
+		WHERE current.device_id > ? OR (current.device_id = ? AND current.rule_id > ?)
+		ORDER BY current.device_id, current.rule_id LIMIT ?`, afterDeviceID, afterDeviceID, afterRuleID, limit)
+}
+
 func (r *AlertRuleRepository) list(ctx context.Context, query string, args ...any) ([]alerts.Rule, error) {
 	rows, err := r.database.QueryContext(ctx, query, args...)
 	if err != nil {

@@ -139,3 +139,25 @@ func TestDashboardQueryResultsFeedDimensionSelectedAlertEvaluation(t *testing.T)
 		t.Fatalf("dashboard metric alert evaluation=%+v err=%v", evaluation, err)
 	}
 }
+
+func TestCurrentSnapshotSamplesPreservesSnapshotLivenessWithoutCollection(t *testing.T) {
+	now := time.Now().UTC()
+	source := alertSnapshotSource{snapshot: dashboard.Snapshot{
+		Envelope:   metrics.MetricEnvelope{Device: metrics.DeviceInfo{ID: "node-a"}, Timestamp: now, CPU: metrics.CPUMetrics{UsagePercent: 42}},
+		ReceivedAt: now, Status: "offline",
+	}}
+	samplesSource, err := NewCurrentSnapshotSamples(source, dashboard.NewMetricRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	samples, err := samplesSource.Samples(context.Background(), "node-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sample := samples["cpu.usage_percent"]; sample.Value != 42 || sample.Quality != QualityStale {
+		t.Fatalf("CPU sample=%+v", sample)
+	}
+	if sample := samples["cpu.temperature_celsius"]; sample.Quality != QualityMissing {
+		t.Fatalf("optional sample=%+v", sample)
+	}
+}

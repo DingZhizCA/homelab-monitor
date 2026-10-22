@@ -37,6 +37,11 @@ type RuleRepository interface {
 	SaveRevisionWithAudit(context.Context, string, Rule, uint64, audit.Event) error
 }
 
+// EvaluationRuleRepository provides stable global pages for bounded scheduling.
+type EvaluationRuleRepository interface {
+	ListEvaluationPage(context.Context, string, string, int) ([]Rule, error)
+}
+
 type ruleKey struct {
 	deviceID string
 	ruleID   string
@@ -126,6 +131,34 @@ func (r *MemoryRuleRepository) ListCurrent(ctx context.Context, deviceID string)
 		}
 	}
 	sort.Slice(rules, func(i, j int) bool { return rules[i].ID < rules[j].ID })
+	return rules, nil
+}
+
+// ListEvaluationPage returns current rules after a stable device/rule cursor.
+func (r *MemoryRuleRepository) ListEvaluationPage(ctx context.Context, afterDeviceID, afterRuleID string, limit int) ([]Rule, error) {
+	if limit < 1 || (afterDeviceID == "" && afterRuleID != "") {
+		return nil, errors.New("valid alert evaluation cursor and positive limit are required")
+	}
+	if err := checkRuleRepositoryContext(ctx); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rules := make([]Rule, 0)
+	for key, stored := range r.rules {
+		if key.deviceID > afterDeviceID || (key.deviceID == afterDeviceID && key.ruleID > afterRuleID) {
+			rules = append(rules, cloneRule(stored.revisions[stored.current]))
+		}
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		if rules[i].DeviceID == rules[j].DeviceID {
+			return rules[i].ID < rules[j].ID
+		}
+		return rules[i].DeviceID < rules[j].DeviceID
+	})
+	if len(rules) > limit {
+		rules = rules[:limit]
+	}
 	return rules, nil
 }
 

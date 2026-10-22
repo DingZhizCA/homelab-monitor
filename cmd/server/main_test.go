@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
 	"github.com/DingZhizCA/homelab-monitor/internal/plugins"
 	"github.com/DingZhizCA/homelab-monitor/internal/server"
 	"github.com/DingZhizCA/homelab-monitor/internal/testutil"
@@ -68,6 +69,12 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	}
 	if handler, err := buildAlertRuleRuntime(nil, nil, alertRuleRuntimeConfig{maxBodyBytes: 1024}); err == nil || handler != nil {
 		t.Fatalf("partial alert-rule handler=%v err=%v", handler, err)
+	}
+	if engine, err := buildAlertEvaluationRuntime(nil, nil, nil, alertRuleRuntimeConfig{}, alertEvaluationRuntimeConfig{}); err != nil || engine != nil {
+		t.Fatalf("disabled alert engine=%v err=%v", engine, err)
+	}
+	if engine, err := buildAlertEvaluationRuntime(nil, nil, nil, alertRuleRuntimeConfig{}, alertEvaluationRuntimeConfig{enabled: true}); err == nil || engine != nil {
+		t.Fatalf("partial alert engine=%v err=%v", engine, err)
 	}
 	if runtime, err := buildPluginRuntime(nil, nil, nil, pluginRuntimeConfig{artifactDirectory: "/private/plugins"}); err == nil || runtime != nil {
 		t.Fatalf("partial plugin runtime=%v err=%v", runtime, err)
@@ -235,6 +242,16 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	zero := time.Duration(0)
+	alertEngine, err := buildAlertEvaluationRuntime(databases, humanAuth, store,
+		alertRuleRuntimeConfig{maxBodyBytes: 1 << 20, maxDepth: 4, maxConditions: 8},
+		alertEvaluationRuntimeConfig{
+			enabled: true, interval: time.Hour, timeout: time.Second, maxRulesPerRun: 10, maxIncidentStates: 10,
+			pendingFor: &zero, recoveryFor: &zero, unknownBehavior: alerts.UncertainHold, disabledBehavior: alerts.UncertainHold,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
 	artifactDirectory := filepath.Join(testutil.TempDir(t), "artifacts")
 	if err := os.Mkdir(artifactDirectory, 0o700); err != nil {
 		t.Fatal(err)
@@ -318,6 +335,14 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("alert-rule save status=%d body=%s", response.Code, response.Body.String())
+	}
+	alertSummary := alertEngine.RunOnce(context.Background())
+	if alertSummary.Succeeded != 1 || alertSummary.Failed != 0 {
+		t.Fatalf("alert evaluation summary=%+v", alertSummary)
+	}
+	var incidentJSON string
+	if err := databases.Core.QueryRow(`SELECT state_json FROM incident_states WHERE device_id = ? AND rule_id = ?`, "node-a", "high-cpu").Scan(&incidentJSON); err != nil || !strings.Contains(incidentJSON, `"status":"inactive"`) {
+		t.Fatalf("incident state=%s err=%v", incidentJSON, err)
 	}
 
 	for _, path := range []string{

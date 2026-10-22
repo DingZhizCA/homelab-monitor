@@ -29,8 +29,33 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
 	"github.com/DingZhizCA/homelab-monitor/internal/server"
 )
+
+type explicitDurationFlag struct {
+	value time.Duration
+	set   bool
+}
+
+func (f *explicitDurationFlag) String() string { return f.value.String() }
+
+func (f *explicitDurationFlag) Set(value string) error {
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return err
+	}
+	f.value, f.set = parsed, true
+	return nil
+}
+
+func (f *explicitDurationFlag) pointer() *time.Duration {
+	if !f.set {
+		return nil
+	}
+	value := f.value
+	return &value
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -71,6 +96,16 @@ func run() error {
 	alertRuleMaxBodyBytes := flag.Int64("alert-rule-max-body-bytes", 0, "maximum alert-rule mutation request body bytes")
 	alertRuleMaxDepth := flag.Int("alert-rule-max-depth", 0, "maximum alert-rule expression depth")
 	alertRuleMaxConditions := flag.Int("alert-rule-max-conditions", 0, "maximum metric conditions in one alert rule")
+	alertEvaluationEnabled := flag.Bool("alert-evaluation-enabled", false, "enable bounded evaluation of current alert rules")
+	alertEvaluationInterval := flag.Duration("alert-evaluation-interval", 0, "interval between alert evaluation runs")
+	alertEvaluationTimeout := flag.Duration("alert-evaluation-timeout", 0, "timeout for one alert evaluation run")
+	alertEvaluationMaxRules := flag.Int("alert-evaluation-max-rules", 0, "maximum rules evaluated in one run")
+	incidentMaxStates := flag.Int("incident-max-states", 0, "maximum current Incident states retained")
+	var incidentPendingFor, incidentRecoveryFor explicitDurationFlag
+	flag.Var(&incidentPendingFor, "incident-pending-for", "continuous true duration before firing; explicitly set 0s for immediate")
+	flag.Var(&incidentRecoveryFor, "incident-recovery-for", "continuous false duration before resolving; explicitly set 0s for immediate")
+	incidentUnknownBehavior := flag.String("incident-unknown-behavior", "", "Incident behavior for unknown evaluation: hold, reset_pending, or resolve")
+	incidentDisabledBehavior := flag.String("incident-disabled-behavior", "", "Incident behavior for disabled rule: hold, reset_pending, or resolve")
 	pluginArtifactDirectory := flag.String("plugin-artifact-dir", "", "private immutable plugin artifact repository directory")
 	pluginMaxArtifactBytes := flag.Int64("plugin-max-artifact-bytes", 0, "maximum plugin artifact bytes read or served")
 	flag.Parse()
@@ -171,6 +206,17 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	alertEngine, err := buildAlertEvaluationRuntime(databases, humanAuth, store, alertRuleRuntimeConfig{
+		maxBodyBytes: *alertRuleMaxBodyBytes, maxDepth: *alertRuleMaxDepth, maxConditions: *alertRuleMaxConditions,
+	}, alertEvaluationRuntimeConfig{
+		enabled: *alertEvaluationEnabled, interval: *alertEvaluationInterval, timeout: *alertEvaluationTimeout,
+		maxRulesPerRun: *alertEvaluationMaxRules, maxIncidentStates: *incidentMaxStates,
+		pendingFor: incidentPendingFor.pointer(), recoveryFor: incidentRecoveryFor.pointer(),
+		unknownBehavior: alerts.UncertainBehavior(*incidentUnknownBehavior), disabledBehavior: alerts.UncertainBehavior(*incidentDisabledBehavior),
+	})
+	if err != nil {
+		return err
+	}
 	pluginsRuntime, err := buildPluginRuntime(databases, deviceAuthorizer, humanAuth, pluginRuntimeConfig{
 		artifactDirectory: *pluginArtifactDirectory,
 		maxArtifactBytes:  *pluginMaxArtifactBytes,
@@ -235,6 +281,18 @@ func run() error {
 		defer func() {
 			cancelRetention()
 			<-retentionDone
+		}()
+	}
+	if alertEngine != nil {
+		alertContext, cancelAlerts := context.WithCancel(ctx)
+		alertDone := make(chan struct{})
+		go func() {
+			alertEngine.Run(alertContext)
+			close(alertDone)
+		}()
+		defer func() {
+			cancelAlerts()
+			<-alertDone
 		}()
 	}
 	go func() {

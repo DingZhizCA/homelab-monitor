@@ -115,6 +115,22 @@ func (c alertRuleRuntimeConfig) disabled() bool {
 	return c.maxBodyBytes == 0 && c.maxDepth == 0 && c.maxConditions == 0
 }
 
+type alertEvaluationRuntimeConfig struct {
+	enabled           bool
+	interval          time.Duration
+	timeout           time.Duration
+	maxRulesPerRun    int
+	maxIncidentStates int
+	pendingFor        *time.Duration
+	recoveryFor       *time.Duration
+	unknownBehavior   alerts.UncertainBehavior
+	disabledBehavior  alerts.UncertainBehavior
+}
+
+func (c alertEvaluationRuntimeConfig) disabled() bool {
+	return !c.enabled && c.interval == 0 && c.timeout == 0 && c.maxRulesPerRun == 0 && c.maxIncidentStates == 0 && c.pendingFor == nil && c.recoveryFor == nil && c.unknownBehavior == "" && c.disabledBehavior == ""
+}
+
 type pluginRuntimeConfig struct {
 	artifactDirectory string
 	maxArtifactBytes  int64
@@ -365,6 +381,44 @@ func buildAlertRuleRuntime(databases *storage.Databases, humanAuth *authRuntime,
 		return nil, err
 	}
 	return server.NewAlertRuleHandler(service, humanAuth.handler, config.maxBodyBytes)
+}
+
+func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRuntime, snapshots dashboard.SnapshotSource, ruleConfig alertRuleRuntimeConfig, config alertEvaluationRuntimeConfig) (*alerts.Engine, error) {
+	if config.disabled() {
+		return nil, nil
+	}
+	if !config.enabled || databases == nil || humanAuth == nil || humanAuth.registry == nil || snapshots == nil || ruleConfig.maxDepth < 1 || ruleConfig.maxConditions < 1 || config.interval <= 0 || config.timeout <= 0 || config.maxRulesPerRun < 1 || config.maxIncidentStates < 1 || config.pendingFor == nil || config.recoveryFor == nil || config.unknownBehavior == "" || config.disabledBehavior == "" {
+		return nil, errors.New("enabled alert evaluation requires storage, current snapshots, alert-rule limits, and explicit positive scheduling limits and Incident policy")
+	}
+	limits := alerts.Limits{MaxDepth: ruleConfig.maxDepth, MaxConditions: ruleConfig.maxConditions}
+	rules, err := storage.NewAlertRuleRepository(databases.Core, humanAuth.registry, limits)
+	if err != nil {
+		return nil, err
+	}
+	incidents, err := storage.NewIncidentRepository(databases.Core, config.maxIncidentStates)
+	if err != nil {
+		return nil, err
+	}
+	samples, err := alerts.NewCurrentSnapshotSamples(snapshots, humanAuth.registry)
+	if err != nil {
+		return nil, err
+	}
+	evaluator, err := alerts.NewEvaluator(humanAuth.registry, limits)
+	if err != nil {
+		return nil, err
+	}
+	return alerts.NewEngine(samples, rules, incidents, evaluator, alerts.EngineConfig{
+		Interval: config.interval, Timeout: config.timeout, MaxRulesPerRun: config.maxRulesPerRun,
+		IncidentPolicy: alerts.IncidentPolicy{PendingFor: config.pendingFor, RecoveryFor: config.recoveryFor, UnknownBehavior: config.unknownBehavior, DisabledBehavior: config.disabledBehavior},
+	}, logAlertEvaluationObservation)
+}
+
+func logAlertEvaluationObservation(observation alerts.EngineObservation) {
+	if observation.Err != nil {
+		log.Printf("component=alerts level=ERROR device_id=%q rule_id=%q revision=%d evaluation=%q duration=%q msg=%q", observation.DeviceID, observation.RuleID, observation.Revision, observation.Evaluation, observation.Duration, observation.Err)
+		return
+	}
+	log.Printf("component=alerts level=INFO device_id=%q rule_id=%q revision=%d evaluation=%q incident=%q duration=%q msg=%q", observation.DeviceID, observation.RuleID, observation.Revision, observation.Evaluation, observation.Incident, observation.Duration, "alert rule evaluated")
 }
 
 func buildPluginRuntime(databases *storage.Databases, devices server.DeviceAuthorizer, humanAuth *authRuntime, config pluginRuntimeConfig) (*pluginRuntime, error) {
