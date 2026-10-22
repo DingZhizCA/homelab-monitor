@@ -20,10 +20,11 @@ import (
 	"github.com/DingZhizCA/homelab-monitor/internal/metrics"
 )
 
-var metricMigrations = []Migration{{
-	Version: 1,
-	Name:    "metric_batches_and_snapshots",
-	SQL: `CREATE TABLE metric_batches (
+var metricMigrations = []Migration{
+	{
+		Version: 1,
+		Name:    "metric_batches_and_snapshots",
+		SQL: `CREATE TABLE metric_batches (
 		batch_id TEXT PRIMARY KEY,
 		device_id TEXT NOT NULL,
 		content_sha256 BLOB NOT NULL CHECK (length(content_sha256) = 32),
@@ -39,7 +40,19 @@ var metricMigrations = []Migration{{
 	);
 	CREATE INDEX metric_snapshots_device_time
 		ON metric_snapshots (device_id, sampled_at, batch_id, sequence);`,
-}}
+	},
+	{
+		Version: 2,
+		Name:    "metric_batch_received_time",
+		SQL: `ALTER TABLE metric_batches ADD COLUMN received_at TEXT NOT NULL DEFAULT '';
+	UPDATE metric_batches
+	SET received_at = COALESCE(
+		(SELECT MAX(sampled_at) FROM metric_snapshots WHERE metric_snapshots.batch_id = metric_batches.batch_id),
+		'1970-01-01T00:00:00.000000000Z'
+	)
+	WHERE received_at = '';`,
+	},
+}
 
 // MetricBatchWriter atomically persists and deduplicates bounded metric batches.
 type MetricBatchWriter struct {
@@ -81,9 +94,9 @@ func (w *MetricBatchWriter) AppendBatch(ctx context.Context, batch metrics.Batch
 	}
 	defer transaction.Rollback()
 	result, err := transaction.ExecContext(ctx, `INSERT INTO metric_batches
-		(batch_id, device_id, content_sha256, snapshot_count)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(batch_id) DO NOTHING`, batch.ID, batch.DeviceID, digest[:], len(batch.Snapshots))
+		(batch_id, device_id, content_sha256, snapshot_count, received_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(batch_id) DO NOTHING`, batch.ID, batch.DeviceID, digest[:], len(batch.Snapshots), storageTimestamp(time.Now()))
 	if err != nil {
 		return false, fmt.Errorf("insert metric batch identity: %w", err)
 	}

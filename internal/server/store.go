@@ -59,7 +59,7 @@ type RefreshJob struct {
 }
 
 // Store holds current device snapshots and refresh jobs in memory.
-// Store 使用锁保护共享 map；Server 重启后其中的数据不会保留。
+// Store 使用锁保护共享 map；持久化批次可在启动时恢复快照，刷新任务不会恢复。
 type Store struct {
 	mu                 sync.RWMutex
 	snapshots          map[string]storedSnapshot
@@ -93,6 +93,21 @@ func (s *Store) UpdateIfNewer(snapshot metrics.MetricEnvelope) (DeviceState, boo
 	state := s.updateLocked(snapshot, now)
 	s.mu.Unlock()
 	return state, true
+}
+
+// RestoreLatest installs persisted current state without replaying refresh side effects.
+func (s *Store) RestoreLatest(snapshot metrics.MetricEnvelope, receivedAt time.Time) (DeviceState, bool) {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if receivedAt.IsZero() || snapshot.Device.ID == "" {
+		return DeviceState{}, false
+	}
+	if current, exists := s.snapshots[snapshot.Device.ID]; exists && !snapshot.Timestamp.After(current.snapshot.Timestamp) {
+		return stateAt(current.snapshot, current.receivedAt, now), false
+	}
+	s.snapshots[snapshot.Device.ID] = storedSnapshot{snapshot: snapshot, receivedAt: receivedAt}
+	return stateAt(snapshot, receivedAt, now), true
 }
 
 func (s *Store) updateLocked(snapshot metrics.MetricEnvelope, now time.Time) DeviceState {

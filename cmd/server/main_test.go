@@ -88,6 +88,15 @@ func TestBuildMetricBatchRuntimePersistsAuthenticatedRetries(t *testing.T) {
 	if batches != 1 || snapshots != 1 {
 		t.Fatalf("batches=%d snapshots=%d", batches, snapshots)
 	}
+	restoredStore := server.NewStore()
+	restored, err := restoreMetricCurrentState(context.Background(), databases, restoredStore)
+	if err != nil || restored != 1 {
+		t.Fatalf("restored=%d err=%v", restored, err)
+	}
+	state, ok := restoredStore.Get("node-a")
+	if !ok || state.Snapshot.CPU.UsagePercent != 10 || state.ReceivedAt.IsZero() {
+		t.Fatalf("restored state=%+v found=%t", state, ok)
+	}
 }
 
 func TestBuildAuthRuntimeConnectsBootstrapSessionCurrentAndHistoryRoutes(t *testing.T) {

@@ -7,10 +7,13 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/DingZhizCA/homelab-monitor/internal/metrics"
 	"github.com/DingZhizCA/homelab-monitor/internal/testutil"
 )
 
@@ -35,7 +38,7 @@ func TestOpenCreatesIsolatedDatabasesWithApprovedSettings(t *testing.T) {
 	for name, fixture := range map[string]struct {
 		database *sql.DB
 		want     int
-	}{"core": {databases.Core, 1}, "metrics": {databases.Metrics, 1}} {
+	}{"core": {databases.Core, 1}, "metrics": {databases.Metrics, 2}} {
 		var count int
 		if err := fixture.database.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 			t.Fatalf("%s migration ledger: %v", name, err)
@@ -56,6 +59,61 @@ func TestOpenRejectsNonPrivateStorageDirectory(t *testing.T) {
 	}
 	if _, err := Open(context.Background(), directory); err == nil {
 		t.Fatal("group-readable storage directory was accepted")
+	}
+}
+
+func TestOpenBackfillsLegacyMetricBatchReceiptTime(t *testing.T) {
+	directory := filepath.Join(testutil.TempDir(t), "storage")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := openSQLite(context.Background(), filepath.Join(directory, "metrics.db"), "NORMAL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrations(context.Background(), database, metricMigrations[:1]); err != nil {
+		t.Fatal(err)
+	}
+	sampledAt := time.Date(2026, 10, 22, 1, 2, 3, 4, time.UTC)
+	envelope := metrics.MetricEnvelope{
+		SchemaVersion: 1, Timestamp: sampledAt, SamplingMode: "idle", SamplingIntervalSeconds: 30,
+		Device: metrics.DeviceInfo{ID: "node-a", DisplayName: "Node A", Hostname: "node-a"},
+		CPU:    metrics.CPUMetrics{UsagePercent: 10, LogicalCores: 4},
+		Memory: metrics.MemoryMetrics{TotalBytes: 1024, UsedBytes: 512, AvailableBytes: 512, UsagePercent: 50},
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO metric_batches (batch_id, device_id, content_sha256, snapshot_count) VALUES ('legacy', 'node-a', zeroblob(32), 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO metric_snapshots (batch_id, sequence, device_id, sampled_at, envelope_json) VALUES ('legacy', 0, 'node-a', ?, ?)`, storageTimestamp(sampledAt), encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	databases, err := Open(context.Background(), directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = databases.Close() })
+	var receivedAt string
+	if err := databases.Metrics.QueryRow(`SELECT received_at FROM metric_batches WHERE batch_id = 'legacy'`).Scan(&receivedAt); err != nil {
+		t.Fatal(err)
+	}
+	if receivedAt != storageTimestamp(sampledAt) {
+		t.Fatalf("received_at=%q", receivedAt)
+	}
+	source, err := NewMetricCurrentSource(databases.Metrics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err := source.LoadLatest(context.Background())
+	if err != nil || len(latest) != 1 || !latest[0].ReceivedAt.Equal(sampledAt) {
+		t.Fatalf("latest=%+v err=%v", latest, err)
 	}
 }
 

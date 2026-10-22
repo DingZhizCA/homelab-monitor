@@ -67,6 +67,29 @@ func openServerStorage(ctx context.Context, directory string) (*storage.Database
 	return storage.Open(ctx, directory)
 }
 
+func restoreMetricCurrentState(ctx context.Context, databases *storage.Databases, store *server.Store) (int, error) {
+	if databases == nil {
+		return 0, nil
+	}
+	if store == nil {
+		return 0, errors.New("current-state store is required")
+	}
+	source, err := storage.NewMetricCurrentSource(databases.Metrics)
+	if err != nil {
+		return 0, err
+	}
+	snapshots, err := source.LoadLatest(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, snapshot := range snapshots {
+		if _, restored := store.RestoreLatest(snapshot.Envelope, snapshot.ReceivedAt); !restored {
+			return 0, errors.New("persisted current metric snapshot could not be restored")
+		}
+	}
+	return len(snapshots), nil
+}
+
 func buildMetricBatchRuntime(databases *storage.Databases, api *server.Handler, config metricBatchRuntimeConfig) (*server.MetricsBatchHandler, error) {
 	if config.disabled() {
 		return nil, nil

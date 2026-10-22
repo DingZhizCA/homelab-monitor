@@ -24,3 +24,25 @@ func TestStoreLiveness(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreRestoreLatestPreservesReceiptTimeAndOrdering(t *testing.T) {
+	base := time.Date(2026, 10, 22, 8, 0, 0, 0, time.UTC)
+	store := NewStore()
+	store.now = func() time.Time { return base.Add(2 * time.Minute) }
+	newer := metrics.MetricEnvelope{
+		Timestamp: base.Add(-time.Minute), SamplingIntervalSeconds: 5,
+		Device: metrics.DeviceInfo{ID: "n1"},
+	}
+	state, restored := store.RestoreLatest(newer, base)
+	if !restored || !state.ReceivedAt.Equal(base) || state.Status != "offline" {
+		t.Fatalf("restored=%t state=%+v", restored, state)
+	}
+	older := newer
+	older.Timestamp = newer.Timestamp.Add(-time.Minute)
+	if state, restored = store.RestoreLatest(older, base.Add(time.Minute)); restored || !state.Snapshot.Timestamp.Equal(newer.Timestamp) {
+		t.Fatalf("older restored=%t state=%+v", restored, state)
+	}
+	if _, restored = store.RestoreLatest(newer, time.Time{}); restored {
+		t.Fatal("zero receipt time was restored")
+	}
+}

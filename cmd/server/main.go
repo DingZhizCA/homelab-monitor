@@ -103,6 +103,13 @@ func run() error {
 		log.Printf("component=server level=INFO storage=%q msg=%q", *storageDirectory, "SQLite storage initialized")
 	}
 	store := server.NewStore()
+	restored, err := restoreMetricCurrentState(context.Background(), databases, store)
+	if err != nil {
+		return err
+	}
+	if restored > 0 {
+		log.Printf("component=server level=INFO devices=%d msg=%q", restored, "restored current state from SQLite")
+	}
 	broker := server.NewBroker()
 	presence := server.NewPresence()
 	handler := server.NewHandlerWithDeviceAuthorizer(store, broker, deviceAuthorizer, presence)
