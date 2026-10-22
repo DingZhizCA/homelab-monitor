@@ -12,6 +12,15 @@ monitoring:
   idle_interval: 60s
   active_interval: 5s
 
+metrics_batch:
+  # Keep disabled until the Server has an HTTPS, device-authenticated atomic batch writer.
+  enabled: false
+  # Enabling requires every bound below; the queue is memory-only and is lost on restart.
+  # max_queued_snapshots: <positive count>
+  # max_queued_bytes: <positive byte limit>
+  # max_batch_snapshots: <positive count not greater than queue capacity>
+  # max_body_bytes: <positive request byte limit>
+
 collectors:
   cpu: true
   memory: true
@@ -23,3 +32,20 @@ collectors:
   sensor_interval: 1m
   disk_interval: 5m
   power_state_interval: 1m
+
+plugins:
+  # Opt in only after the Server exposes the device-scoped plugin control routes.
+  enabled: false
+  # Set every field below before enabling; these values have no implicit defaults.
+  # publisher_key_path: "/etc/homelab-monitor/plugin-publisher.pub"
+  # permission_file: "/etc/homelab-monitor/plugin-grants.json"
+  # staging_directory: "/var/lib/homelab-monitor/plugins/staging"
+  # runtime_directory: "/run/homelab-monitor/plugins"
+  # host_protocol_major: 1
+  # max_artifact_bytes: <explicit byte limit>
+  # poll_interval: "5m"
+  # operation_timeout: "30s"
+  # Explicitly choose plugin restart failure policy before enabling control.
+  # max_consecutive_failures: <positive count>
+  # initial_failure_backoff: "<positive duration>"
+  # max_failure_backoff: "<duration not shorter than initial backoff>"

@@ -82,6 +82,34 @@ export interface Point {
   temperature_time: number | null
 }
 
+/** Server-approved metric schema used by the explicit historical query form. */
+export interface MetricDescriptor {
+  id: string
+  name: string
+  unit: string
+  dimensions?: string[]
+  description: string
+}
+
+/** One persisted metric observation; absent values remain gaps rather than zeroes. */
+export interface HistoricalPoint {
+  device_id: string
+  descriptor_id: string
+  sampled_at: string
+  value?: number
+  dimensions?: Record<string, string>
+  quality: 'valid' | 'partial' | 'estimated' | 'missing' | 'reset' | 'stale'
+}
+
+/** Bounded history response returned by the authenticated Server query API. */
+export interface HistoricalMetricResult {
+  descriptor: MetricDescriptor
+  device_id: string
+  from: string
+  to: string
+  points: HistoricalPoint[]
+}
+
 /** Lifecycle state for one explicitly authorized disk-capacity refresh. */
 export interface RefreshJob {
   request_id: string

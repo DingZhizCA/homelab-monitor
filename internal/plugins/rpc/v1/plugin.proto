@@ -1,0 +1,121 @@
+// Versioned local contract for plugin processes and the Agent-side Plugin Host.
+// Collection values remain JSON bytes so the plugin RPC does not force the
+// existing Agent-to-Server metrics schema to change with plugin API versions.
+syntax = "proto3";
+
+package homelab.plugins.v1;
+
+option go_package = "github.com/DingZhizCA/homelab-monitor/internal/plugins/rpc/v1;pluginv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service Plugin {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  rpc Describe(google.protobuf.Empty) returns (DescribeResponse);
+  rpc ValidateConfig(ValidateConfigRequest) returns (google.protobuf.Empty);
+  rpc Collect(CollectRequest) returns (CollectResponse);
+  rpc Health(google.protobuf.Empty) returns (HealthResponse);
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+}
+
+message HandshakeRequest {
+  string plugin_id = 1;
+  string version = 2;
+  uint32 host_protocol_major = 3;
+  // Capabilities the Host can consume without changing this protocol major.
+  repeated string host_features = 4;
+}
+
+message HandshakeResponse {
+  uint32 plugin_protocol_major = 1;
+  uint32 min_host_protocol_major = 2;
+  uint32 max_host_protocol_major = 3;
+}
+
+message DescribeResponse {
+  repeated CollectorDescriptor collectors = 1;
+}
+
+message CollectorDescriptor {
+  string collector_id = 1;
+  repeated MetricDescriptor metrics = 2;
+}
+
+message MetricDescriptor {
+  string metric_id = 1;
+  MetricType type = 2;
+  string unit = 3;
+  repeated string label_keys = 4;
+}
+
+enum MetricType {
+  METRIC_TYPE_UNSPECIFIED = 0;
+  METRIC_TYPE_COUNTER = 1;
+  METRIC_TYPE_GAUGE = 2;
+  METRIC_TYPE_STATE = 3;
+  METRIC_TYPE_EVENT = 4;
+}
+
+message ValidateConfigRequest {
+  string collector_id = 1;
+  // The collector configuration is encoded as JSON and contains no secret values.
+  bytes json_config = 2;
+}
+
+message CollectRequest {
+  string collector_id = 1;
+  bytes json_config = 2;
+}
+
+message CollectResponse {
+  google.protobuf.Timestamp observed_at = 1;
+  repeated MetricSample samples = 2;
+}
+
+message MetricSample {
+  string metric_id = 1;
+  // JSON preserves integer precision while leaving metric schema evolution to the data layer.
+  bytes json_value = 2;
+  DataQuality quality = 3;
+  // Labels must contain exactly the keys declared by the metric descriptor.
+  map<string, string> labels = 4;
+}
+
+enum DataQuality {
+  DATA_QUALITY_UNSPECIFIED = 0;
+  DATA_QUALITY_VALID = 1;
+  DATA_QUALITY_PARTIAL = 2;
+  DATA_QUALITY_ESTIMATED = 3;
+  DATA_QUALITY_MISSING = 4;
+  DATA_QUALITY_RESET = 5;
+  DATA_QUALITY_STALE = 6;
+}
+
+message HealthResponse {
+  HealthState state = 1;
+  string message = 2;
+}
+
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  HEALTH_STATE_SERVING = 1;
+  HEALTH_STATE_DEGRADED = 2;
+  HEALTH_STATE_NOT_SERVING = 3;
+}
+
+enum PluginErrorCode {
+  PLUGIN_ERROR_UNSPECIFIED = 0;
+  PLUGIN_ERROR_INVALID_ARGUMENT = 1;
+  PLUGIN_ERROR_PERMISSION_DENIED = 2;
+  PLUGIN_ERROR_RESOURCE_EXHAUSTED = 3;
+  PLUGIN_ERROR_DEADLINE_EXCEEDED = 4;
+  PLUGIN_ERROR_UNAVAILABLE = 5;
+  PLUGIN_ERROR_INCOMPATIBLE_PROTOCOL = 6;
+  PLUGIN_ERROR_INTERNAL = 7;
+}
+
+message PluginErrorDetail {
+  PluginErrorCode code = 1;
+  string message = 2;
+}

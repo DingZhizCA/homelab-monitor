@@ -29,7 +29,17 @@ export function chartTooltip(params: unknown, mode: ChartMode, formatTime: (valu
     const value = Number(raw)
     if (!Number.isFinite(value)) continue
     const formatted = mode === 'network' ? formatByteRate(value) : mode === 'temperature' ? `${value.toFixed(1)} °C` : formatPercent(value)
-    lines.push(`${String(row.seriesName || '数值')}：${formatted}`)
+    lines.push(`${escapeTooltipText(String(row.seriesName || '数值'))}：${formatted}`)
   }
   return lines.join('<br/>')
+}
+
+function escapeTooltipText(value: string) {
+  return value.replace(/[&<>"']/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character]!)
 }

@@ -32,32 +32,46 @@ import (
 )
 
 func main() {
-	addr := flag.String("listen", ":8080", "HTTP listen address")
+	addr := flag.String("listen", ":8080", "HTTP(S) listen address")
 	webDir := flag.String("web-dir", "", "directory containing the built Dashboard (disabled when empty)")
+	tlsCert := flag.String("tls-cert", "", "TLS certificate for HTTPS (both TLS flags are required together)")
+	tlsKey := flag.String("tls-key", "", "TLS private key for HTTPS (both TLS flags are required together)")
+	agentCredentials := flag.String("agent-credentials", "", "private JSON file containing per-device token SHA-256 verifiers")
 	flag.Parse()
+	if (*tlsCert == "") != (*tlsKey == "") {
+		log.Fatal("component=server level=ERROR msg=both tls-cert and tls-key are required")
+	}
+	if *agentCredentials == "" {
+		log.Printf("component=server level=WARN msg=%q", "Agent device authentication is disabled for compatibility; metrics requests are not bound to device credentials")
+	}
+	var deviceAuthorizer server.DeviceAuthorizer
+	if *agentCredentials != "" {
+		if *tlsCert == "" {
+			log.Fatal("component=server level=ERROR msg=agent credentials require configured HTTPS")
+		}
+		credentials, err := server.LoadDeviceCredentials(*agentCredentials)
+		if err != nil {
+			log.Fatalf("component=server level=ERROR msg=%q", err)
+		}
+		deviceAuthorizer = credentials
+	}
 	store := server.NewStore()
 	broker := server.NewBroker()
 	presence := server.NewPresence()
-	handler := server.NewHandler(store, broker, presence)
-	// 使用独立 ServeMux，避免依赖全局 DefaultServeMux。
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/health", handler.Health)
-	mux.HandleFunc("/api/v1/metrics", handler.Metrics)
-	mux.HandleFunc("/api/v1/devices", handler.Devices)
-	mux.HandleFunc("/api/v1/devices/", handler.Device)
-	mux.HandleFunc("/api/v1/events", handler.Events)
-	mux.HandleFunc("/api/v1/presence", handler.Presence)
-	mux.HandleFunc("/api/v1/refresh/", handler.RefreshStatus)
+	handler := server.NewHandlerWithDeviceAuthorizer(store, broker, deviceAuthorizer, presence)
 	if *webDir != "" {
 		if info, err := os.Stat(*webDir); err != nil || !info.IsDir() {
 			log.Fatalf("component=server level=ERROR msg=%q", "web-dir must be a readable directory")
 		}
-		mux.Handle("/", server.NewSPAHandler(*webDir))
+	}
+	router, err := server.NewRouter(server.RouterOptions{API: handler, WebDirectory: *webDir})
+	if err != nil {
+		log.Fatalf("component=server level=ERROR msg=%q", err)
 	}
 
 	httpServer := &http.Server{
 		Addr:              *addr,
-		Handler:           mux,
+		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -73,7 +87,13 @@ func main() {
 		}
 	}()
 	log.Printf("component=server level=INFO listen=%q msg=%q", *addr, "started")
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	var serveErr error
+	if *tlsCert != "" {
+		serveErr = httpServer.ListenAndServeTLS(*tlsCert, *tlsKey)
+	} else {
+		serveErr = httpServer.ListenAndServe()
+	}
+	if err := serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 	log.Print("component=server level=INFO msg=stopped")

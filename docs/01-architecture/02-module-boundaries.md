@@ -1,0 +1,45 @@
+# Go 模块边界与依赖约束
+
+> **文档状态**：架构规划（尚未实施）
+> **整理依据**：用户历轮确认 + “未单独确认项按推荐方案生成”的授权
+> **说明**：技术参数的具体默认数值需要在模块实施时验证；本文不构成现网变更指令。
+
+## 模块划分
+| 模块 | 所有权及数据 | 对外能力 |
+|---|---|---|
+| identity | Device、IdentityBinding、接口、信任来源 | 设备合并/拆分、解析、历史关联 |
+| topology | 二层接入、路由、Tailnet 关系与证据 | 时间化关系查询 |
+| metrics | Descriptor、Envelope、Counter/Gauge 校验 | 接收标准化指标 |
+| ingestion | 批量入站、校验、幂等和限流 | 写入受控观测数据 |
+| timeseries | 原始数据、分层汇总与质量位 | 查询、汇总、保留清理 |
+| flow | Internet/LAN/Tailnet 计量与去重账本 | 分类流量查询 |
+| plugins | 包、签名、版本、期望/实际状态 | 制品分发与部署管理 |
+| collectors | Remote Host / Agent 协同配置 | 调度、限时执行 |
+| alerting | 规则版本、评估、Incident | 告警查询及状态迁移 |
+| notifications | 投递任务、订阅、静默 | Push、站内通知 |
+| auth | 用户、角色、Session、设备凭据 | 登录、鉴权、凭据生命周期 |
+| dashboards | Dashboard、Widget、草稿与发布版本 | 受权布局操作 |
+| query | 统一读模型、查询预算、缓存 | Widget、Explore、导出 API |
+| operations | 自身指标、资源预算、审计 | 健康及管理 |
+
+## Go 包职责原则
+建议 `cmd/server` 与 `cmd/agent` 为启动入口；`internal/server/<domain>` 和 `internal/agent/<domain>` 隔离执行模式；`pkg/protocol` 或内部 versioned contract 保存跨进程公共模型。具体目录命名可以与现有仓库适配，不应直接覆盖当前目录结构。
+
+- 每个模块暴露应用级接口，不允许跨域直接读写彼此的存储表。
+- 插件跨进程契约是版本化 Protobuf；Go 内部模块接口无需在第一版全部定义为 RPC。
+- 数据访问依赖方向为 Web/API → 业务域 → 仓储接口 → 存储实现；禁止基础采集依赖 Web 组件。
+- 所有跨域命令携带调用者身份、目标 Device ID、截止时间、版本和审计上下文。
+- 观察数据的事实字段保持不可变；归属关系和聚合派生值允许版本化更正。
+
+## 当前仓储接入点
+现有 `internal/server.Handler` 通过 `CurrentStateRepository` 访问当前设备快照与显式刷新任务；插件状态 API 通过独立的 `PluginStateStore` 访问期望/上报状态。当前实现仍是进程内内存存储，接口仅为后续持久化适配器提供替换点，不表示状态已经持久化。
+
+本地人类用户的密码和服务端 Session 逻辑位于 `internal/auth`，HTTP 认证 Handler 位于 `internal/server`，其仓储接口与 Agent Device Token 校验相互独立。Router 仅在注入 AuthHandler 时保护人类用户 API；当前没有持久化适配器，Server 启动入口不会创建或暴露 Web 登录状态。
+
+`cmd/server` 只负责读取启动参数、构造当前实现并启动 HTTP Server；稳定 API 路径由 `internal/server.NewRouter` 装配。插件控制 Handler 可作为可选依赖显式传入 Router，但当前启动入口尚未构造或挂载它，因为期望状态没有已批准的持久化/管理写入实现。这个边界避免把一个无状态的内存 Registry 暴露成可用控制平面。
+
+## 任务调度与事件
+定期采集由 Host/Agent 调度器负责；历史聚合、告警评估与通知由 Server 内部受控工作队列执行。第一版可使用有界内存队列加持久化任务状态，不引入外部 Message Broker。跨域事件需定义幂等键和失败重放策略。
+
+## 模块测试边界
+同域单测使用依赖注入；协议兼容测试验证 Protobuf、HTTP Schema；端到端测试用模拟插件和数据库测试实例，禁止以实际停用 N1 网络服务作为自动化测试手段。

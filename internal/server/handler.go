@@ -11,7 +11,6 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -23,22 +22,45 @@ import (
 
 const maxMetricsBody = 1 << 20
 
+// CurrentStateRepository is the persistence boundary for current device state and refresh jobs.
+type CurrentStateRepository interface {
+	Update(metrics.MetricEnvelope) DeviceState
+	UpdateIfNewer(metrics.MetricEnvelope) (DeviceState, bool)
+	List() []DeviceState
+	Get(deviceID string) (DeviceState, bool)
+	RequestDiskRefresh(deviceID string) (RefreshJob, bool, error)
+	TakeDiskRefresh(deviceID string) string
+	GetRefresh(requestID string) (RefreshJob, bool)
+}
+
 // Handler owns HTTP behavior and coordinates Server application components.
-// Handler 组合 Store、Broker 和 Presence，但不在自身保存共享业务状态。
+// Handler 组合状态仓储、Broker 和 Presence，但不在自身保存共享业务状态。
 type Handler struct {
-	store    *Store
+	store    CurrentStateRepository
 	broker   *Broker
 	presence *Presence
+	devices  DeviceAuthorizer
 }
 
 // NewHandler creates an HTTP Handler; an omitted Presence uses a fresh tracker.
 // NewHandler 的可选 Presence 参数主要用于测试注入可控时间。
 func NewHandler(store *Store, broker *Broker, presence ...*Presence) *Handler {
+	return NewHandlerWithDeviceAuthorizer(store, broker, nil, presence...)
+}
+
+// NewHandlerWithDeviceAuthorizer creates an API handler with optional device-token enforcement.
+// A nil authorizer preserves the existing Agent metrics protocol during migration.
+func NewHandlerWithDeviceAuthorizer(store *Store, broker *Broker, devices DeviceAuthorizer, presence ...*Presence) *Handler {
+	return NewHandlerWithRepository(store, broker, devices, presence...)
+}
+
+// NewHandlerWithRepository accepts any current-state store implementation.
+func NewHandlerWithRepository(store CurrentStateRepository, broker *Broker, devices DeviceAuthorizer, presence ...*Presence) *Handler {
 	p := NewPresence()
 	if len(presence) > 0 && presence[0] != nil {
 		p = presence[0]
 	}
-	return &Handler{store: store, broker: broker, presence: p}
+	return &Handler{store: store, broker: broker, presence: p, devices: devices}
 }
 
 // Health serves the liveness endpoint.
@@ -56,17 +78,20 @@ func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodPost) {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxMetricsBody)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	var snapshot metrics.MetricEnvelope
-	if err := decoder.Decode(&snapshot); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", "request body must be one valid metrics JSON object")
+	if !decodeSingleJSONBody(w, r, maxMetricsBody, &snapshot, "INVALID_JSON", "request body must be one unambiguous metrics JSON object", "") {
 		return
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", "request body must contain exactly one JSON object")
-		return
+	if h.devices != nil {
+		if r.TLS == nil {
+			writeError(w, http.StatusForbidden, "HTTPS_REQUIRED", "device credentials require HTTPS")
+			return
+		}
+		token, ok := bearerToken(r.Header.Get("Authorization"))
+		if !ok || !h.devices.Authorize(snapshot.Device.ID, token) {
+			writeError(w, http.StatusUnauthorized, "DEVICE_UNAUTHORIZED", "device credentials are invalid")
+			return
+		}
 	}
 	if err := snapshot.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_METRICS", err.Error())
@@ -131,7 +156,7 @@ func (h *Handler) Device(w http.ResponseWriter, r *http.Request) {
 	}
 	rawID := strings.TrimPrefix(r.URL.Path, "/api/v1/devices/")
 	deviceID, err := url.PathUnescape(rawID)
-	if err != nil || deviceID == "" || strings.Contains(deviceID, "/") {
+	if err != nil || strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID || strings.Contains(deviceID, "/") {
 		writeError(w, http.StatusNotFound, "DEVICE_NOT_FOUND", "device not found")
 		return
 	}
@@ -148,19 +173,11 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodPost) {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	var request struct {
 		Collectors []string `json:"collectors"`
 		AllowWake  bool     `json:"allow_wake"`
 	}
-	if err := decoder.Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_REFRESH", "request body must be valid JSON")
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		writeError(w, http.StatusBadRequest, "INVALID_REFRESH", "request body must contain exactly one JSON object")
+	if !decodeSingleJSONBody(w, r, 4096, &request, "INVALID_REFRESH", "request body must be one unambiguous refresh object", "") {
 		return
 	}
 	if !request.AllowWake || len(request.Collectors) != 1 || request.Collectors[0] != "disk" {
@@ -169,7 +186,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	rawID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/devices/"), "/refresh")
 	deviceID, err := url.PathUnescape(rawID)
-	if err != nil || deviceID == "" || strings.Contains(deviceID, "/") {
+	if err != nil || strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID || strings.Contains(deviceID, "/") {
 		writeError(w, http.StatusNotFound, "DEVICE_NOT_FOUND", "device not found")
 		return
 	}

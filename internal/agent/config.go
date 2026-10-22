@@ -1,7 +1,7 @@
 /*
 Package agent defines and validates homelab-agent configuration.
 
-本文件负责解析 YAML、补齐安全默认值并验证采样周期与必需字段。
+本文件负责解析 YAML、补齐兼容采样默认值，并验证采集、可选批量上报与插件控制参数。
 本文件不启动采集器、不访问硬件，也不向 Server 发送数据。
 
 数据链路：agent.yaml -> Config -> cmd/agent -> Collector and Sender
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -48,6 +49,13 @@ type Config struct {
 		IdleInterval   Duration `yaml:"idle_interval"`
 		ActiveInterval Duration `yaml:"active_interval"`
 	} `yaml:"monitoring"`
+	MetricsBatch struct {
+		Enabled            bool  `yaml:"enabled"`
+		MaxQueuedSnapshots int   `yaml:"max_queued_snapshots"`
+		MaxQueuedBytes     int64 `yaml:"max_queued_bytes"`
+		MaxBatchSnapshots  int   `yaml:"max_batch_snapshots"`
+		MaxBodyBytes       int64 `yaml:"max_body_bytes"`
+	} `yaml:"metrics_batch"`
 	Collectors struct {
 		CPU     *bool `yaml:"cpu"`
 		Memory  *bool `yaml:"memory"`
@@ -61,6 +69,20 @@ type Config struct {
 		// PowerInterval is the minimum time between power-state query attempts.
 		PowerInterval Duration `yaml:"power_state_interval"`
 	} `yaml:"collectors"`
+	Plugins struct {
+		Enabled                bool     `yaml:"enabled"`
+		PublisherKeyPath       string   `yaml:"publisher_key_path"`
+		PermissionFile         string   `yaml:"permission_file"`
+		StagingDirectory       string   `yaml:"staging_directory"`
+		RuntimeDirectory       string   `yaml:"runtime_directory"`
+		HostProtocolMajor      uint16   `yaml:"host_protocol_major"`
+		MaxArtifactBytes       int64    `yaml:"max_artifact_bytes"`
+		PollInterval           Duration `yaml:"poll_interval"`
+		OperationTimeout       Duration `yaml:"operation_timeout"`
+		MaxConsecutiveFailures uint32   `yaml:"max_consecutive_failures"`
+		InitialFailureBackoff  Duration `yaml:"initial_failure_backoff"`
+		MaxFailureBackoff      Duration `yaml:"max_failure_backoff"`
+	} `yaml:"plugins"`
 }
 
 // LoadConfig decodes a YAML file, applies defaults, and validates the result.
@@ -108,8 +130,11 @@ func (c Config) Validate() error {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return fmt.Errorf("server.url must be an absolute HTTP(S) URL")
 	}
-	if strings.TrimSpace(c.Agent.DeviceID) == "" {
-		return fmt.Errorf("agent.device_id is required")
+	if c.Server.Token != "" && parsed.Scheme != "https" {
+		return fmt.Errorf("server.url must use HTTPS when server.token is configured")
+	}
+	if strings.TrimSpace(c.Agent.DeviceID) == "" || strings.TrimSpace(c.Agent.DeviceID) != c.Agent.DeviceID {
+		return fmt.Errorf("agent.device_id is required and must not have surrounding whitespace")
 	}
 	if strings.TrimSpace(c.Agent.DisplayName) == "" {
 		return fmt.Errorf("agent.display_name is required")
@@ -119,6 +144,17 @@ func (c Config) Validate() error {
 	}
 	if c.Monitoring.ActiveInterval.Duration < time.Second || c.Monitoring.IdleInterval.Duration < c.Monitoring.ActiveInterval.Duration {
 		return fmt.Errorf("monitoring intervals must be positive and idle_interval must not be shorter than active_interval")
+	}
+	if c.MetricsBatch.Enabled {
+		if parsed.Scheme != "https" || strings.TrimSpace(c.Server.Token) == "" {
+			return fmt.Errorf("metrics_batch.enabled requires HTTPS and a device token")
+		}
+		if c.MetricsBatch.MaxQueuedSnapshots < 1 || c.MetricsBatch.MaxQueuedBytes < 1 || c.MetricsBatch.MaxBatchSnapshots < 1 || c.MetricsBatch.MaxBodyBytes < 1 {
+			return fmt.Errorf("metrics_batch requires explicit positive queue count, queue byte, batch count, and body limits")
+		}
+		if c.MetricsBatch.MaxBatchSnapshots > c.MetricsBatch.MaxQueuedSnapshots {
+			return fmt.Errorf("metrics_batch.max_batch_snapshots cannot exceed max_queued_snapshots")
+		}
 	}
 	if !enabled(c.Collectors.CPU) || !enabled(c.Collectors.Memory) {
 		return fmt.Errorf("CPU and memory collectors are required in phase 1")
@@ -131,6 +167,27 @@ func (c Config) Validate() error {
 	}
 	if c.Collectors.PowerInterval.Duration < c.Monitoring.ActiveInterval.Duration {
 		return fmt.Errorf("collectors.power_state_interval must not be shorter than monitoring.active_interval")
+	}
+	if c.Plugins.Enabled {
+		if parsed.Scheme != "https" || strings.TrimSpace(c.Server.Token) == "" {
+			return fmt.Errorf("plugins.enabled requires HTTPS and a device token")
+		}
+		for _, entry := range []struct{ name, path string }{
+			{"publisher_key_path", c.Plugins.PublisherKeyPath},
+			{"permission_file", c.Plugins.PermissionFile},
+			{"staging_directory", c.Plugins.StagingDirectory},
+			{"runtime_directory", c.Plugins.RuntimeDirectory},
+		} {
+			if !filepath.IsAbs(entry.path) {
+				return fmt.Errorf("plugins.%s must be an absolute path", entry.name)
+			}
+		}
+		if c.Plugins.HostProtocolMajor == 0 || c.Plugins.MaxArtifactBytes < 1 || c.Plugins.PollInterval.Duration <= 0 || c.Plugins.OperationTimeout.Duration <= 0 {
+			return fmt.Errorf("plugins requires explicit protocol, artifact limit, poll interval, and operation timeout")
+		}
+		if c.Plugins.MaxConsecutiveFailures == 0 || c.Plugins.InitialFailureBackoff.Duration <= 0 || c.Plugins.MaxFailureBackoff.Duration < c.Plugins.InitialFailureBackoff.Duration {
+			return fmt.Errorf("plugins requires an explicit positive failure limit and ordered failure backoffs")
+		}
 	}
 	return nil
 }

@@ -17,4 +17,10 @@ describe('chart data', () => {
     expect(chartTooltip([{ axisValue: 1, seriesName: 'CPU 使用率', value: [1, 12.345] }], 'resource', time)).toContain('CPU 使用率：12.3%')
     expect(chartTooltip([{ axisValue: 1, seriesName: '接收速率', value: [1, 1536] }], 'network', time)).toContain('接收速率：1.5 KB/s')
   })
+
+  it('escapes user controlled series names in HTML tooltips', () => {
+    const tooltip = chartTooltip([{ axisValue: 1, seriesName: '<img src=x onerror=alert(1)>', value: [1, 10] }], 'resource', () => 'now')
+    expect(tooltip).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(tooltip).not.toContain('<img')
+  })
 })

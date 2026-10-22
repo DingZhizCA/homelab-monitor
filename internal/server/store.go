@@ -9,12 +9,14 @@ Package server implements current device state and refresh-job storage.
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/DingZhizCA/homelab-monitor/internal/dashboard"
 	"github.com/DingZhizCA/homelab-monitor/internal/metrics"
 )
 
@@ -75,6 +77,25 @@ func NewStore() *Store {
 func (s *Store) Update(snapshot metrics.MetricEnvelope) DeviceState {
 	now := s.now()
 	s.mu.Lock()
+	state := s.updateLocked(snapshot, now)
+	s.mu.Unlock()
+	return state
+}
+
+// UpdateIfNewer replaces current state only when the sample timestamp advances.
+func (s *Store) UpdateIfNewer(snapshot metrics.MetricEnvelope) (DeviceState, bool) {
+	now := s.now()
+	s.mu.Lock()
+	if current, exists := s.snapshots[snapshot.Device.ID]; exists && !snapshot.Timestamp.After(current.snapshot.Timestamp) {
+		s.mu.Unlock()
+		return stateAt(current.snapshot, current.receivedAt, now), false
+	}
+	state := s.updateLocked(snapshot, now)
+	s.mu.Unlock()
+	return state, true
+}
+
+func (s *Store) updateLocked(snapshot metrics.MetricEnvelope, now time.Time) DeviceState {
 	s.snapshots[snapshot.Device.ID] = storedSnapshot{snapshot, now}
 	if snapshot.RefreshRequestID != "" {
 		if job, ok := s.refreshJobs[snapshot.RefreshRequestID]; ok && job.DeviceID == snapshot.Device.ID && job.Status == "delivered" {
@@ -86,7 +107,6 @@ func (s *Store) Update(snapshot metrics.MetricEnvelope) DeviceState {
 			s.refreshJobs[job.ID] = job
 		}
 	}
-	s.mu.Unlock()
 	return stateAt(snapshot, now, now)
 }
 
@@ -145,6 +165,15 @@ func (s *Store) Get(deviceID string) (DeviceState, bool) {
 		return DeviceState{}, false
 	}
 	return stateAt(stored.snapshot, stored.receivedAt, s.now()), true
+}
+
+// Current returns the latest snapshot projection required by the Dashboard query boundary.
+func (s *Store) Current(_ context.Context, deviceID string) (dashboard.Snapshot, bool, error) {
+	state, ok := s.Get(deviceID)
+	if !ok {
+		return dashboard.Snapshot{}, false, nil
+	}
+	return dashboard.Snapshot{Envelope: state.Snapshot, ReceivedAt: state.ReceivedAt, Status: state.Status}, true, nil
 }
 
 // List returns all devices sorted by stable device ID with current liveness.

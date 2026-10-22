@@ -3,12 +3,15 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/DingZhizCA/homelab-monitor/internal/testutil"
 )
 
 func TestLoadConfigDefaults(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "agent.yaml")
+	path := filepath.Join(testutil.TempDir(t), "agent.yaml")
 	data := []byte("server:\n  url: http://127.0.0.1:8080\nagent:\n  device_id: n1\n  display_name: N1\n")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -20,15 +23,111 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if config.Monitoring.IdleInterval.Duration != time.Minute || config.Monitoring.ActiveInterval.Duration != 5*time.Second {
 		t.Fatalf("unexpected intervals: %+v", config.Monitoring)
 	}
+	if config.Plugins.Enabled {
+		t.Fatal("plugin runtime must remain disabled when not explicitly configured")
+	}
+	if config.MetricsBatch.Enabled {
+		t.Fatal("metrics batching must remain disabled when not explicitly configured")
+	}
+}
+
+func TestExampleAgentConfigLoadsWithPluginControlDisabled(t *testing.T) {
+	config, err := LoadConfig(filepath.Join("..", "..", "configs", "agent.example.yaml"))
+	if err != nil {
+		t.Fatalf("load example Agent config: %v", err)
+	}
+	if config.Plugins.Enabled {
+		t.Fatal("example config must leave plugin control disabled")
+	}
+	if config.MetricsBatch.Enabled {
+		t.Fatal("example config must leave metrics batching disabled")
+	}
+}
+
+func TestLoadConfigRequiresExplicitSecureMetricsBatchSettings(t *testing.T) {
+	directory := testutil.TempDir(t)
+	base := "server:\n  url: https://server.example\n  token: device-token\nagent:\n  device_id: n1\n  display_name: N1\nmetrics_batch:\n  enabled: true\n  max_queued_snapshots: 8\n  max_queued_bytes: 65536\n  max_batch_snapshots: 4\n  max_body_bytes: 32768\n"
+	path := filepath.Join(directory, "agent.yaml")
+	if err := os.WriteFile(path, []byte(base), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err != nil {
+		t.Fatalf("complete explicit metrics batch settings rejected: %v", err)
+	}
+	for _, invalid := range []string{
+		strings.Replace(base, "https://server.example", "http://server.example", 1),
+		strings.Replace(base, "  token: device-token\n", "", 1),
+		strings.Replace(base, "  max_queued_snapshots: 8\n", "", 1),
+		strings.Replace(base, "  max_queued_bytes: 65536\n", "", 1),
+		strings.Replace(base, "  max_batch_snapshots: 4\n", "", 1),
+		strings.Replace(base, "  max_body_bytes: 32768\n", "", 1),
+		strings.Replace(base, "  max_batch_snapshots: 4\n", "  max_batch_snapshots: 9\n", 1),
+	} {
+		if err := os.WriteFile(path, []byte(invalid), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err == nil {
+			t.Fatal("incomplete or insecure metrics batch settings were accepted")
+		}
+	}
+}
+
+func TestLoadConfigRequiresExplicitSecurePluginRuntimeSettings(t *testing.T) {
+	directory := testutil.TempDir(t)
+	base := "server:\n  url: https://server.example\n  token: device-token\nagent:\n  device_id: n1\n  display_name: N1\nplugins:\n  enabled: true\n  publisher_key_path: " + filepath.Join(directory, "publisher.pub") + "\n  permission_file: " + filepath.Join(directory, "grants.json") + "\n  staging_directory: " + filepath.Join(directory, "staging") + "\n  runtime_directory: " + filepath.Join(directory, "runtime") + "\n  host_protocol_major: 1\n  max_artifact_bytes: 1048576\n  poll_interval: 1m\n  operation_timeout: 30s\n  max_consecutive_failures: 5\n  initial_failure_backoff: 1s\n  max_failure_backoff: 5m\n"
+	path := filepath.Join(directory, "agent.yaml")
+	if err := os.WriteFile(path, []byte(base), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err != nil {
+		t.Fatalf("complete explicit plugin settings rejected: %v", err)
+	}
+	for _, invalid := range []string{
+		"server:\n  url: http://server.example\n  token: device-token\n" + strings.TrimPrefix(base, "server:\n  url: https://server.example\n  token: device-token\n"),
+		strings.Replace(base, "  poll_interval: 1m\n", "", 1),
+		strings.Replace(base, "  max_consecutive_failures: 5\n", "", 1),
+		strings.Replace(base, "  initial_failure_backoff: 1s\n", "", 1),
+		strings.Replace(base, "  max_failure_backoff: 5m\n", "", 1),
+		strings.Replace(base, "  publisher_key_path: "+filepath.Join(directory, "publisher.pub")+"\n", "  publisher_key_path: relative.pub\n", 1),
+	} {
+		if err := os.WriteFile(path, []byte(invalid), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(path); err == nil {
+			t.Fatal("incomplete or insecure plugin settings were accepted")
+		}
+	}
 }
 
 func TestLoadConfigRejectsDisabledRequiredCollector(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "agent.yaml")
+	path := filepath.Join(testutil.TempDir(t), "agent.yaml")
 	data := []byte("server:\n  url: http://127.0.0.1:8080\nagent:\n  device_id: n1\n  display_name: N1\ncollectors:\n  cpu: false\n")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadConfig(path); err == nil {
 		t.Fatal("disabled CPU collector was accepted")
+	}
+}
+
+func TestLoadConfigRequiresHTTPSForDeviceToken(t *testing.T) {
+	path := filepath.Join(testutil.TempDir(t), "agent.yaml")
+	data := []byte("server:\n  url: http://127.0.0.1:8080\n  token: device-secret\nagent:\n  device_id: n1\n  display_name: N1\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("HTTP endpoint with a device token was accepted")
+	}
+}
+
+func TestLoadConfigRejectsUntrimmedDeviceIdentity(t *testing.T) {
+	path := filepath.Join(testutil.TempDir(t), "agent.yaml")
+	data := []byte("server:\n  url: http://127.0.0.1:8080\nagent:\n  device_id: ' n1 '\n  display_name: N1\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("Agent config accepted a device ID with surrounding whitespace")
 	}
 }

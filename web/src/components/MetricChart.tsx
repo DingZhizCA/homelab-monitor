@@ -14,13 +14,24 @@ echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, Canvas
 /** Render one responsive ECharts option with an accessible text label. */
 export function MetricChart({ option, label }: { option: EChartsOption; label: string }) {
   const ref = useRef<HTMLDivElement>(null)
+  const chart = useRef<echarts.ECharts | null>(null)
+
   useEffect(() => {
     if (!ref.current) return
-    const chart = echarts.init(ref.current)
-    chart.setOption(option)
-    const observer = new ResizeObserver(() => chart.resize())
+    const instance = echarts.init(ref.current)
+    chart.current = instance
+    const observer = new ResizeObserver(() => instance.resize())
     observer.observe(ref.current)
-    return () => { observer.disconnect(); chart.dispose() }
+    return () => {
+      observer.disconnect()
+      instance.dispose()
+      chart.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    chart.current?.setOption(option)
   }, [option])
+
   return <div ref={ref} className="h-56 w-full sm:h-64" role="img" aria-label={label} />
 }

@@ -5,10 +5,16 @@
  * 数据链路：Server API -> browser history buffer -> cards and ECharts
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Activity, Clock3, Cpu, Gauge, HardDrive, MemoryStick, Moon, RefreshCw, Server, Sun, Thermometer, Wifi } from 'lucide-react'
+import { Activity, Clock3, Cpu, Gauge, HardDrive, LogOut, MemoryStick, Moon, RefreshCw, Server, Sun, Thermometer, Wifi } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { AppNavigation, type AppPage } from '@/components/AppNavigation'
+import { DashboardManagement } from '@/components/DashboardManagement'
+import { ExploreOverview } from '@/components/ExploreOverview'
+import { LoginScreen } from '@/components/LoginScreen'
+import { NetworkOverview } from '@/components/NetworkOverview'
+import { OwnerUserManagement } from '@/components/OwnerUserManagement'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { DeviceState, DiskMetric, Point, RefreshJob } from '@/types'
@@ -24,7 +30,11 @@ const uptime = (s: number) => `${Math.floor(s / 86400)} 天 ${Math.floor(s % 864
 const toPoint = (d: DeviceState): Point => ({ time: +new Date(d.snapshot.timestamp), cpu: d.snapshot.cpu.usage_percent, memory: d.snapshot.memory.usage_percent, rx: d.snapshot.networks.reduce((a, n) => a + n.rx_bytes_per_second, 0), tx: d.snapshot.networks.reduce((a, n) => a + n.tx_bytes_per_second, 0), temperature: d.snapshot.cpu.temperature_celsius, temperature_time: d.snapshot.cpu.sensor_collected_at ? +new Date(d.snapshot.cpu.sensor_collected_at) : null })
 
 export default function App() {
+  const [authState, setAuthState] = useState<'checking' | 'login' | 'legacy' | 'authenticated' | 'unavailable'>('checking')
+  const [authMessage, setAuthMessage] = useState('')
+  const [userRole, setUserRole] = useState<'owner' | 'viewer' | null>(null)
   const [devices, setDevices] = useState<DeviceState[]>([]), [selectedID, setSelectedID] = useState('')
+  const [page, setPage] = useState<AppPage>('dashboard')
   const [history, setHistory] = useState<Record<string, Point[]>>({}), [loading, setLoading] = useState(true)
   const [error, setError] = useState(''), [connected, setConnected] = useState(false)
   const [dark, setDark] = useState(() => localStorage.theme === 'dark' || (!localStorage.theme && matchMedia('(prefers-color-scheme: dark)').matches))
@@ -36,13 +46,77 @@ export default function App() {
     setHistory(h => ({ ...h, [id]: appendPoint(h[id] || [], toPoint(state)) }))
   }, [])
   useEffect(() => {
-    fetch('/api/v1/devices').then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json() }).then((rows: DeviceState[]) => { setDevices(rows); if (rows[0]) { setSelectedID(rows[0].snapshot.device.id); setHistory(Object.fromEntries(rows.map(d => [d.snapshot.device.id, [toPoint(d)]]))) } }).catch(e => setError(`无法读取设备：${e.message}`)).finally(() => setLoading(false))
+    const controller = new AbortController()
+    fetch('/api/v1/auth/session', { credentials: 'same-origin', signal: controller.signal }).then(async response => {
+      if (response.status === 404) { setAuthState('legacy'); return }
+      if (response.status === 401) {
+        setDevices([])
+        setHistory({})
+        setSelectedID('')
+        setUserRole(null)
+        setAuthState('login')
+        return
+      }
+      if (response.status === 403) throw new Error('认证要求通过 HTTPS 访问。')
+      if (!response.ok) throw new Error(`认证服务返回 ${response.status}`)
+      const session = await response.json() as { user?: { role?: 'owner' | 'viewer' } }
+      setUserRole(session.user?.role === 'owner' || session.user?.role === 'viewer' ? session.user.role : null)
+      setAuthState('authenticated')
+    }).catch(error => {
+      if (error.name !== 'AbortError') {
+        setAuthMessage(error.message || '无法连接认证服务。')
+        setAuthState('unavailable')
+      }
+    })
+    return () => controller.abort()
+  }, [])
+  useEffect(() => {
+    if (authState !== 'legacy' && authState !== 'authenticated') return
+    const controller = new AbortController()
+    fetch('/api/v1/devices', { credentials: 'same-origin', signal: controller.signal }).then(response => {
+      if (response.status === 401 && authState === 'authenticated') {
+        setDevices([])
+        setHistory({})
+        setSelectedID('')
+        setUserRole(null)
+        setAuthState('login')
+        return null
+      }
+      if (!response.ok) throw new Error(`${response.status}`)
+      return response.json() as Promise<DeviceState[]>
+    }).then(rows => {
+      if (!rows) return
+      setDevices(rows)
+      if (rows[0]) {
+        setSelectedID(rows[0].snapshot.device.id)
+        setHistory(Object.fromEntries(rows.map(device => [device.snapshot.device.id, [toPoint(device)]])))
+      }
+    }).catch(error => { if (error.name !== 'AbortError') setError(`无法读取设备：${error.message}`) }).finally(() => setLoading(false))
     const stream = new EventSource('/api/v1/events'); stream.onopen = () => setConnected(true); stream.onerror = () => setConnected(false)
     stream.addEventListener('metrics', e => { setConnected(true); merge(JSON.parse((e as MessageEvent).data)) })
-    return () => stream.close()
-  }, [merge])
+    return () => { controller.abort(); stream.close() }
+  }, [authState, merge])
   useEffect(() => { document.documentElement.classList.toggle('dark', dark); localStorage.theme = dark ? 'dark' : 'light' }, [dark])
-  useEffect(() => { const ping = () => { if (document.visibilityState === 'visible') fetch('/api/v1/presence', { method: 'POST' }).catch(() => undefined) }; ping(); const timer = setInterval(ping, 30000); document.addEventListener('visibilitychange', ping); return () => { clearInterval(timer); document.removeEventListener('visibilitychange', ping) } }, [])
+  useEffect(() => { if (authState !== 'legacy' && authState !== 'authenticated') return; const ping = () => { if (document.visibilityState === 'visible') fetch('/api/v1/presence', { method: 'POST', credentials: 'same-origin' }).catch(() => undefined) }; ping(); const timer = setInterval(ping, 30000); document.addEventListener('visibilitychange', ping); return () => { clearInterval(timer); document.removeEventListener('visibilitychange', ping) } }, [authState])
+  useEffect(() => {
+    if (authState !== 'authenticated') return
+    const timer = setInterval(() => {
+      fetch('/api/v1/auth/session', { credentials: 'same-origin' }).then(response => {
+        if (response.status === 401) {
+          setDevices([])
+          setHistory({})
+          setSelectedID('')
+          setUserRole(null)
+          setAuthState('login')
+        }
+        else if (response.ok) return response.json() as Promise<{ user?: { role?: 'owner' | 'viewer' } }>
+        return null
+      }).then(session => {
+        if (session) setUserRole(session.user?.role === 'owner' || session.user?.role === 'viewer' ? session.user.role : null)
+      }).catch(() => undefined)
+    }, 60_000)
+    return () => clearInterval(timer)
+  }, [authState])
 
   const selected = devices.find(d => d.snapshot.device.id === selectedID) || devices[0], points = history[selected?.snapshot.device.id] || EMPTY_POINTS
   const chart = useMemo(() => chartOption(points, dark, 'resource'), [points, dark]), networkChart = useMemo(() => chartOption(points, dark, 'network'), [points, dark]), temperatureChart = useMemo(() => chartOption(points, dark, 'temperature'), [points, dark])
@@ -54,10 +128,49 @@ export default function App() {
     const poll = setInterval(async () => { const r = await fetch(`/api/v1/refresh/${created.request_id}`); if (!r.ok) return; const next: RefreshJob = await r.json(); setJob(next); if (['completed', 'failed', 'expired'].includes(next.status)) clearInterval(poll) }, 1000)
     setTimeout(() => clearInterval(poll), 31 * 60_000)
   }
+  async function logout() {
+    try {
+      const response = await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' })
+      if (!response.ok && response.status !== 401) throw new Error(`认证服务返回 ${response.status}`)
+      setDevices([])
+      setHistory({})
+      setSelectedID('')
+      setConnected(false)
+      setJob(null)
+      setError('')
+      setUserRole(null)
+      setAuthState('login')
+    } catch (error) {
+      setError(`注销失败：${error instanceof Error ? error.message : '无法连接认证服务'}`)
+    }
+  }
+  async function authenticated() {
+    setError('')
+    setLoading(true)
+    try {
+      const response = await fetch('/api/v1/auth/session', { credentials: 'same-origin' })
+      if (!response.ok) throw new Error(`认证服务返回 ${response.status}`)
+      const session = await response.json() as { user?: { role?: 'owner' | 'viewer' } }
+      setDevices([])
+      setHistory({})
+      setSelectedID('')
+      setUserRole(session.user?.role === 'owner' || session.user?.role === 'viewer' ? session.user.role : null)
+      setAuthState('authenticated')
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : '无法读取登录会话。')
+      setAuthState('unavailable')
+    }
+  }
+
+  if (authState === 'checking') return <main className="grid min-h-svh place-items-center bg-background text-sm text-muted-foreground" role="status">正在检查登录状态…</main>
+  if (authState === 'login') return <LoginScreen onAuthenticated={() => { void authenticated() }}/>
+  if (authState === 'unavailable') return <main className="grid min-h-svh place-items-center bg-background px-4 text-foreground"><p role="alert" className="max-w-md rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{authMessage}</p></main>
 
   return <div className="min-h-svh bg-background text-foreground">
-    <header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur"><div className="mx-auto flex max-w-[1800px] items-center justify-between px-4 py-3 sm:px-6"><div className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-xl bg-emerald-500 text-white"><Activity size={20}/></span><div><h1 className="font-semibold">Home Lab Monitor</h1><p className="text-xs text-muted-foreground">家庭实验室实时状态</p></div></div><div className="flex items-center gap-2"><Badge variant="outline" className="gap-1.5"><span className={`size-2 rounded-full ${connected ? 'bg-emerald-500' : 'bg-amber-500'}`}/>{connected ? '实时连接' : '正在重连'}</Badge><Button variant="ghost" size="icon" onClick={() => setDark(v => !v)} aria-label="切换主题">{dark ? <Sun/> : <Moon/>}</Button></div></div></header>
-    <main className="mx-auto grid max-w-[1800px] gap-5 p-4 sm:p-6 lg:grid-cols-[260px_minmax(0,1fr)]">
+    <header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur"><div className="mx-auto flex max-w-[1800px] items-center justify-between px-4 py-3 sm:px-6"><div className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-xl bg-emerald-500 text-white"><Activity size={20}/></span><div><h1 className="font-semibold">Home Lab Monitor</h1><p className="text-xs text-muted-foreground">家庭实验室实时状态</p></div></div><div className="flex items-center gap-2"><Badge variant="outline" className="gap-1.5"><span className={`size-2 rounded-full ${connected ? 'bg-emerald-500' : 'bg-amber-500'}`}/>{connected ? '实时连接' : '正在重连'}</Badge><Button variant="ghost" size="icon" onClick={() => setDark(v => !v)} aria-label="切换主题">{dark ? <Sun/> : <Moon/>}</Button>{authState === 'authenticated' && <Button variant="outline" size="sm" onClick={() => void logout()}><LogOut/>注销</Button>}</div></div></header>
+    <AppNavigation current={page} onSelect={setPage} showOwnerPages={userRole === 'owner'} showAuthenticatedPages={authState === 'authenticated'}/>
+    <main className={`mx-auto grid max-w-[1800px] gap-5 p-4 sm:p-6 ${page === 'dashboard' ? 'lg:grid-cols-[260px_minmax(0,1fr)]' : ''}`}>
+      {page === 'dashboards' && authState === 'authenticated' ? <DashboardManagement role={userRole === 'owner' ? 'owner' : 'viewer'} devices={devices}/> : page === 'settings' && userRole === 'owner' ? <OwnerUserManagement/> : page === 'network' ? <NetworkOverview devices={devices}/> : page === 'explore' ? <ExploreOverview devices={devices} history={history} dark={dark}/> : <>
       <aside><div className="mb-3 flex justify-between"><h2 className="text-sm font-semibold">设备</h2><Badge variant="secondary">{devices.length}</Badge></div><div className="flex gap-2 overflow-x-auto pb-2 lg:flex-col">{devices.map(d => <button key={d.snapshot.device.id} onClick={() => setSelectedID(d.snapshot.device.id)} className={`min-w-56 rounded-xl border p-3 text-left transition lg:min-w-0 ${selected?.snapshot.device.id === d.snapshot.device.id ? 'border-emerald-500 bg-emerald-500/5' : 'hover:bg-muted'}`}><div className="flex justify-between gap-2"><b className="truncate text-sm">{d.snapshot.device.id}</b><Status value={d.status}/></div><p className="mt-1 truncate text-xs text-muted-foreground">{d.snapshot.device.display_name} · {d.snapshot.device.hostname}</p></button>)}</div></aside>
       <section className="min-w-0">{loading ? <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{[1,2,3,4].map(i => <Skeleton key={i} className="h-32"/>)}</div> : !selected ? <Empty title={error || '还没有设备'} detail="启动 Agent 后，设备将在这里出现。"/> : <>
         <div className="mb-5 flex flex-wrap items-end justify-between gap-3"><div><div className="flex items-center gap-2"><h2 className="text-2xl font-semibold">{selected.snapshot.device.id}</h2><Status value={selected.status}/></div><p className="mt-1 text-sm text-muted-foreground">{selected.snapshot.device.display_name} · {selected.snapshot.device.hostname} · 更新于 {date(selected.received_at)}</p></div><Badge variant="outline">{selected.snapshot.sampling_mode === 'active' ? '实时模式' : '节能模式'} · {selected.snapshot.sampling_interval_seconds} 秒</Badge></div>
@@ -67,6 +180,7 @@ export default function App() {
         <Card className="mt-4"><CardHeader className="flex-row items-center justify-between"><div><CardTitle className="flex items-center gap-2 text-base"><HardDrive size={18}/>文件系统</CardTitle>{job && <p className="mt-1 text-xs text-muted-foreground">刷新任务：{job.status}{job.error ? ` · ${job.error}` : ''}</p>}</div><Button variant="outline" size="sm" onClick={refresh}><RefreshCw/>主动刷新</Button></CardHeader><CardContent><div className="grid gap-3 md:grid-cols-2">{selected.snapshot.disks.length ? selected.snapshot.disks.map(d => <DiskCard key={d.mount_point} disk={d}/>) : <div className="text-sm text-muted-foreground"><p>暂无可识别的文件系统。</p><p className="mt-1 text-xs">低功耗策略不会为发现磁盘而唤醒休眠中的 HDD。</p></div>}</div></CardContent></Card>
         <Card className="mt-4"><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Wifi size={18}/>网络接口</CardTitle></CardHeader><CardContent><div className="overflow-x-auto"><table className="w-full min-w-[560px] text-sm"><thead className="text-left text-xs text-muted-foreground"><tr className="border-b"><th className="pb-2">接口</th><th>接收速率</th><th>发送速率</th><th>累计接收</th><th>累计发送</th></tr></thead><tbody>{selected.snapshot.networks.map(n => <tr key={n.interface} className="border-b last:border-0"><td className="py-3 font-medium">{n.interface}</td><td>{formatByteRate(n.rx_bytes_per_second)}</td><td>{formatByteRate(n.tx_bytes_per_second)}</td><td>{formatBytes(n.rx_bytes)}</td><td>{formatBytes(n.tx_bytes)}</td></tr>)}</tbody></table></div></CardContent></Card>
       </>}</section>
+      </>}
     </main>
   </div>
 }

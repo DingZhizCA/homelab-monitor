@@ -15,7 +15,7 @@
 - HDD 常规采集不会主动唤醒磁盘；用户可以显式请求主动刷新
 - React、TypeScript、Tailwind CSS、shadcn/ui 与 Apache ECharts 响应式 Dashboard
 
-Phase 1 的完整范围和非目标见 [docs/phase-1-spec.md](docs/phase-1-spec.md)，采集算法与功耗约束见 [docs/collector-design.md](docs/collector-design.md)。
+架构决策、模块边界和阶段状态见 [架构文档索引](docs/README.md) 与[实施路线图](docs/08-implementation/01-roadmap-and-gates.md)。指标协议和低功耗约束见[指标流水线说明](docs/03-data/01-metrics-and-pipeline.md)。
 
 ## 环境要求
 
@@ -38,9 +38,12 @@ make check
 mkdir -p bin
 go build -trimpath -o bin/homelab-server ./cmd/server
 go build -trimpath -o bin/homelab-agent ./cmd/agent
+go build -trimpath -o bin/homelab-plugin-pack ./cmd/plugin-pack
 go test -race ./...
 go vet ./...
 ```
+
+`make check` 还会运行 Web lint/测试及独立 SQLite 候选评测模块。评测模块不属于 Server/Agent 运行时依赖，也不会据此自动选择生产存储。
 
 ## 本地运行
 
@@ -103,18 +106,26 @@ collectors:
 
 `device_id` 必须由管理员显式配置，不得从 IP 地址生成。真实 token 和本机配置不得提交到 Git。
 
+Server 可通过 `--tls-cert`、`--tls-key` 启用 HTTPS，并通过 `--agent-credentials` 加载逐设备 Token 摘要。未配置 `--agent-credentials` 时，Server 为兼容旧协议不强制 Agent Token 或 HTTPS；该模式不提供 Agent 身份认证。配置格式和迁移边界见[安全说明](docs/04-security/01-authentication-and-trust.md)。
+
+Agent 插件控制循环默认关闭。启用前必须显式配置插件公钥、权限 grant 文件、私有 staging/runtime 目录、协议版本、单制品大小上限、独立控制轮询间隔和操作超时；该循环与指标采样周期独立。当前 Server 可执行文件尚未装配插件期望状态/制品路由，因此仅配置 Agent 端不足以启用插件分发。
+
+Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设备 Token，并显式设置队列条数、队列字节数、单批条数与请求体字节上限。队列仅驻留内存，失败时保留 pending 批次供后续采样轮次重试，容量满则拒绝新样本；它不会提高采样频率。当前 Server 可执行文件尚无生产历史写入器，也未挂载批量路由。
+
 ## API
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | `GET` | `/api/v1/health` | 健康检查 |
 | `POST` | `/api/v1/metrics` | Agent 上报指标并接收控制指令 |
+| `POST` | `/api/v1/metrics/batch` | 可选：装配设备认证和原子历史写入器后接收幂等指标批次 |
 | `GET` | `/api/v1/devices` | 设备列表和最新状态 |
 | `GET` | `/api/v1/devices/{device_id}` | 单台设备最新状态 |
 | `GET` | `/api/v1/events` | SSE 实时指标流 |
 | `POST` | `/api/v1/presence` | 可见 Dashboard 心跳 |
 | `POST` | `/api/v1/devices/{device_id}/refresh` | 排队一次主动磁盘刷新 |
 | `GET` | `/api/v1/refresh/{request_id}` | 查询刷新任务状态 |
+| `GET` | `/api/v1/dashboard/metrics/history` | 可选：在显式装配历史源、认证、授权和查询预算后读取有界历史指标 |
 
 主动磁盘刷新可能唤醒 HDD，因此必须明确授权：
 
@@ -165,24 +176,29 @@ journalctl -u homelab-agent
 
 ## 项目结构
 
-代码注释和文档注释统一遵循
-[Home Lab Monitor 代码注释规范](docs/comment-guidelines.md)。该规范适用于 Go、
-TypeScript/React、配置、脚本和样式文件。
+仓库开发约束见 [AGENTS.md](AGENTS.md)，架构资料与当前实现状态见 [docs/README.md](docs/README.md)。
 
 ```text
-cmd/                  两个可执行程序入口
-internal/agent/       配置、采集、发送和低功耗策略
-internal/metrics/     共享协议类型与校验
-internal/server/      状态、REST、SSE、presence 和刷新任务
+cmd/                  Server、Agent、插件打包命令
+internal/agent/       配置、采集、发送、批量上报和插件对账
+internal/metrics/     共享指标协议、批次模型与校验
+internal/server/      HTTP 路由、内存状态、认证/插件/Dashboard 模块边界
+internal/plugins/     插件契约、制品验证、Host、Supervisor 与 Registry
+internal/auth/        用户、密码和 Session 服务边界
+internal/audit/       无秘密载荷的管理审计事件契约
+internal/dashboard/   Dashboard 模型、查询和仓储边界
+tools/storage-eval/   与运行时隔离的 SQLite 候选评测模块
 configs/              安全的示例配置
 deployments/systemd/  systemd 单元
-docs/                 规范与设计文档
+docs/                 架构决策、设计与实施路线
 web/                  React Dashboard
 ```
 
 ## 当前限制
 
-- Phase 1 只保存最新状态，Server 重启后数据和刷新任务会丢失
-- 没有持久化历史指标
-- 没有用户系统或多租户功能
-- 浏览器实时曲线只保存当前会话最近约五分钟的数据
+- `cmd/server` 当前只装配原有指标、设备、SSE、Presence 和磁盘刷新 API；设备快照与刷新任务保存在内存，Server 重启后会丢失。
+- Dashboard 历史查询 Handler 已有可选路由实现，但 `cmd/server` 未装配历史存储和该路由；上表不表示当前运行实例已提供该接口。
+- 认证、Owner 管理、插件控制、批量指标、Dashboard 查询等模块已有独立代码或测试，但依赖尚未选定的生产持久化和运行装配，不能据此视为当前 Server 可用功能。
+- Agent 的有界批量队列已提供默认关闭的采样主循环装配；插件控制默认关闭，Server 命令仍未装配生产批量写入器、插件控制及制品路由。
+- 尚无持久化历史指标、流量归属账本或完整 Incident/通知流程。SQLite 仍是评测候选，未接入运行依赖。
+- 插件进程当前为同 UID 子进程，缺少系统级 CPU、内存、文件和网络隔离，不能视为生产安全沙箱。

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -54,6 +55,58 @@ func TestMetricsRejectsInvalidInput(t *testing.T) {
 	}
 	if got := w.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("content type = %q", got)
+	}
+}
+
+func TestMetricsDeviceAuthorizationBindsTokenToDevice(t *testing.T) {
+	credentials := NewDeviceCredentials()
+	if err := credentials.Set("n1", "secret-for-n1"); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandlerWithDeviceAuthorizer(NewStore(), NewBroker(), credentials)
+	body, err := json.Marshal(testEnvelope())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/metrics", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer secret-for-n1")
+	w := httptest.NewRecorder()
+	h.Metrics(w, request)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("plain HTTP metrics status = %d", w.Code)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/metrics", bytes.NewReader(body))
+	request.TLS = &tls.ConnectionState{}
+	request.Header.Set("Authorization", "Bearer secret-for-n1")
+	w = httptest.NewRecorder()
+	h.Metrics(w, request)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("authorized metrics status = %d, body=%s", w.Code, w.Body.String())
+	}
+
+	for _, authorization := range []string{"", "Bearer wrong-token"} {
+		request = httptest.NewRequest(http.MethodPost, "/api/v1/metrics", bytes.NewReader(body))
+		request.TLS = &tls.ConnectionState{}
+		request.Header.Set("Authorization", authorization)
+		w = httptest.NewRecorder()
+		h.Metrics(w, request)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("authorization %q status = %d", authorization, w.Code)
+		}
+	}
+	otherDevice := testEnvelope()
+	otherDevice.Device.ID = "n2"
+	body, err = json.Marshal(otherDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/metrics", bytes.NewReader(body))
+	request.TLS = &tls.ConnectionState{}
+	request.Header.Set("Authorization", "Bearer secret-for-n1")
+	w = httptest.NewRecorder()
+	h.Metrics(w, request)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("cross-device token status = %d", w.Code)
 	}
 }
 
@@ -133,5 +186,10 @@ func TestDiskRefreshRequiresExplicitWakeConsent(t *testing.T) {
 	h.Device(w, httptest.NewRequest(http.MethodPost, "/api/v1/devices/n1/refresh", bytes.NewBufferString(`{"collectors":["disk"],"allow_wake":false}`)))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	h.Device(w, httptest.NewRequest(http.MethodPost, "/api/v1/devices/n1/refresh", bytes.NewBufferString(`{"collectors":["disk"],"allow_wake":false,"allow_wake":true}`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate consent status = %d, body=%s", w.Code, w.Body.String())
 	}
 }

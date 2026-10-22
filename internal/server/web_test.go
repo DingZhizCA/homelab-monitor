@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/DingZhizCA/homelab-monitor/internal/testutil"
 )
 
 func TestSPAHandler(t *testing.T) {
-	directory := t.TempDir()
+	directory := testutil.TempDir(t)
 	if err := os.WriteFile(filepath.Join(directory, "index.html"), []byte("dashboard"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +32,7 @@ func TestSPAHandler(t *testing.T) {
 }
 
 func TestSPAHandlerRejectsWrites(t *testing.T) {
-	handler := NewSPAHandler(t.TempDir())
+	handler := NewSPAHandler(testutil.TempDir(t))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/", nil))
 	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Content-Type") != "application/json" {
