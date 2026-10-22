@@ -132,6 +132,22 @@ func (m *CheckpointManager) CheckpointAll(ctx context.Context) {
 	}
 }
 
+// CheckpointMetricsForCapacity passively checkpoints metrics.db after emergency cleanup.
+func (m *CheckpointManager) CheckpointMetricsForCapacity(ctx context.Context) CheckpointObservation {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	target := m.targets[1]
+	walBytes := int64(0)
+	if info, err := os.Stat(target.walPath); err == nil {
+		walBytes = info.Size()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		observation := CheckpointObservation{Database: target.name, Reason: "capacity", Err: fmt.Errorf("inspect WAL: %w", err)}
+		m.observe(observation)
+		return observation
+	}
+	return m.checkpoint(ctx, target, "capacity", walBytes)
+}
+
 func (m *CheckpointManager) checkpoint(ctx context.Context, target checkpointTarget, reason string, walBytes int64) CheckpointObservation {
 	started := time.Now()
 	operationContext, cancel := context.WithTimeout(ctx, m.config.Timeout)

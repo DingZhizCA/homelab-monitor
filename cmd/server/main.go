@@ -53,6 +53,10 @@ func run() error {
 	receiptRetention := flag.Duration("storage-receipt-retention", 0, "retention window for metric batch retry receipts")
 	retentionDeleteLimit := flag.Int("storage-retention-delete-limit", 0, "maximum snapshots and receipts deleted per retention transaction")
 	retentionTimeout := flag.Duration("storage-retention-timeout", 0, "timeout for each metric retention transaction")
+	coreMaxBytes := flag.Int64("storage-core-max-bytes", 0, "hard maximum bytes allocated to core.db pages")
+	metricsSoftBytes := flag.Int64("storage-metrics-soft-bytes", 0, "logical metric bytes that enter soft capacity state")
+	metricsHardBytes := flag.Int64("storage-metrics-hard-bytes", 0, "hard maximum bytes allocated to metrics.db pages")
+	filesystemMinBytes := flag.Int64("storage-filesystem-min-bytes", 0, "filesystem bytes reserved from metric ingestion")
 	metricMaxSnapshots := flag.Int("metrics-batch-max-snapshots", 0, "maximum snapshots accepted in one persisted Agent batch")
 	metricMaxBodyBytes := flag.Int64("metrics-batch-max-body-bytes", 0, "maximum encoded bytes accepted by the persisted Agent batch endpoint")
 	var authOrigins stringListFlag
@@ -73,6 +77,10 @@ func run() error {
 		log.Printf("component=server level=WARN msg=%q", "Agent device authentication is disabled for compatibility; metrics requests are not bound to device credentials")
 	}
 	metricConfig := metricBatchRuntimeConfig{maxSnapshots: *metricMaxSnapshots, maxBodyBytes: *metricMaxBodyBytes}
+	capacityConfig := capacityRuntimeConfig{
+		coreMaxBytes: *coreMaxBytes, metricsSoftBytes: *metricsSoftBytes,
+		metricsHardBytes: *metricsHardBytes, filesystemMinBytes: *filesystemMinBytes,
+	}
 	if !metricConfig.disabled() && *agentCredentials == "" {
 		return errors.New("persisted metrics batches require Agent device credentials")
 	}
@@ -100,7 +108,7 @@ func run() error {
 		}
 		deviceAuthorizer = credentials
 	}
-	databases, err := openServerStorage(context.Background(), *storageDirectory)
+	databases, err := openServerStorageWithCapacity(context.Background(), *storageDirectory, capacityConfig)
 	if err != nil {
 		return err
 	}
@@ -125,6 +133,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	capacityManager, err := buildCapacityRuntime(context.Background(), databases, retentionManager, checkpointManager, capacityConfig)
+	if err != nil {
+		return err
+	}
+	metricConfig.guard = capacityManager
 	store := server.NewStore()
 	restored, err := restoreMetricCurrentState(context.Background(), databases, store)
 	if err != nil {

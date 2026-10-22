@@ -23,10 +23,14 @@ import (
 type metricBatchWriterFake struct {
 	accepted map[string]metrics.Batch
 	calls    int
+	err      error
 }
 
 func (f *metricBatchWriterFake) AppendBatch(_ context.Context, batch metrics.Batch) (bool, error) {
 	f.calls++
+	if f.err != nil {
+		return false, f.err
+	}
 	if f.accepted == nil {
 		f.accepted = make(map[string]metrics.Batch)
 	}
@@ -38,6 +42,29 @@ func (f *metricBatchWriterFake) AppendBatch(_ context.Context, batch metrics.Bat
 	}
 	f.accepted[batch.ID] = batch
 	return true, nil
+}
+
+func TestMetricsBatchHandlerReportsExhaustedStorage(t *testing.T) {
+	credentials := NewDeviceCredentials()
+	if err := credentials.Set("node-a", "batch-device-token"); err != nil {
+		t.Fatal(err)
+	}
+	api := NewHandlerWithDeviceAuthorizer(NewStore(), NewBroker(), credentials)
+	handler, err := NewMetricsBatchHandler(api, &metricBatchWriterFake{err: metrics.ErrMetricStorageCapacity}, 1, 8192)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(metrics.Batch{
+		ID: "batch-full", DeviceID: "node-a", Snapshots: []metrics.MetricEnvelope{serverBatchEnvelope(time.Now(), 10)},
+	})
+	request := httptest.NewRequest(http.MethodPost, "https://monitor.example/api/v1/metrics/batch", bytes.NewReader(body))
+	request.TLS = &tls.ConnectionState{}
+	request.Header.Set("Authorization", "Bearer batch-device-token")
+	response := httptest.NewRecorder()
+	handler.Ingest(response, request)
+	if response.Code != http.StatusInsufficientStorage || !strings.Contains(response.Body.String(), `"code":"METRIC_STORAGE_FULL"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
 }
 
 func TestMetricsBatchHandlerValidatesAuthorizesAndDeduplicates(t *testing.T) {

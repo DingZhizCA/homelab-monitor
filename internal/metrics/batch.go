@@ -16,7 +16,10 @@ import (
 	"time"
 )
 
-var ErrBatchConflict = errors.New("batch ID was previously used with different contents")
+var (
+	ErrBatchConflict         = errors.New("batch ID was previously used with different contents")
+	ErrMetricStorageCapacity = errors.New("metric storage capacity is exhausted")
+)
 
 type Batch struct {
 	ID        string           `json:"batch_id"`

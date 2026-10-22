@@ -18,6 +18,23 @@ import (
 	"github.com/DingZhizCA/homelab-monitor/internal/testutil"
 )
 
+type metricWriteGuardFake struct {
+	calls         int
+	recoveryCalls int
+	err           error
+	recoveryErr   error
+}
+
+func (g *metricWriteGuardFake) RecoverMetricWrite(context.Context, int64) error {
+	g.recoveryCalls++
+	return g.recoveryErr
+}
+
+func (g *metricWriteGuardFake) PrepareMetricWrite(context.Context, int64) error {
+	g.calls++
+	return g.err
+}
+
 func TestMetricBatchWriterPersistsAndDeduplicatesAcrossReopen(t *testing.T) {
 	directory := filepath.Join(testutil.TempDir(t), "storage")
 	databases, err := Open(context.Background(), directory)
@@ -145,6 +162,30 @@ func TestMetricBatchWriterRequiresLimitsAndHonorsCancelledContext(t *testing.T) 
 		t.Fatalf("cancelled append inserted=%t err=%v", inserted, err)
 	}
 	assertMetricCounts(t, databases, 0, 0)
+}
+
+func TestMetricBatchWriterChecksDuplicatesBeforeCapacityGuard(t *testing.T) {
+	databases := openTestDatabases(t)
+	batch := storageBatch("batch-a", time.Now().UTC(), 10)
+	writer, err := NewMetricBatchWriter(databases.Metrics, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := writer.AppendBatch(context.Background(), batch); err != nil || !inserted {
+		t.Fatalf("first append inserted=%t err=%v", inserted, err)
+	}
+	guard := &metricWriteGuardFake{err: metrics.ErrMetricStorageCapacity}
+	guarded, err := NewMetricBatchWriterWithGuard(databases.Metrics, 1, guard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := guarded.AppendBatch(context.Background(), batch); err != nil || inserted || guard.calls != 0 {
+		t.Fatalf("duplicate inserted=%t guard_calls=%d err=%v", inserted, guard.calls, err)
+	}
+	newBatch := storageBatch("batch-b", batch.Snapshots[0].Timestamp.Add(time.Minute), 20)
+	if inserted, err := guarded.AppendBatch(context.Background(), newBatch); !errors.Is(err, metrics.ErrMetricStorageCapacity) || inserted || guard.calls != 1 {
+		t.Fatalf("new batch inserted=%t guard_calls=%d err=%v", inserted, guard.calls, err)
+	}
 }
 
 func openTestDatabases(t *testing.T) *Databases {

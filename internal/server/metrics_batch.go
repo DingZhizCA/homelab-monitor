@@ -60,6 +60,10 @@ func (h *MetricsBatchHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "METRIC_BATCH_CONFLICT", "batch ID was already used for different sample contents")
 			return
 		}
+		if errors.Is(err, metrics.ErrMetricStorageCapacity) {
+			writeError(w, http.StatusInsufficientStorage, "METRIC_STORAGE_FULL", "metric storage capacity could not be recovered")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "METRIC_BATCH_UNAVAILABLE", "metric batch could not be stored")
 		return
 	}

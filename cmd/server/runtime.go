@@ -1,7 +1,7 @@
 /*
-Package main assembles optional persistence, WAL maintenance, human
-authentication, and metric query runtimes from explicit Server command-line
-configuration.
+Package main assembles optional persistence, bounded storage maintenance and
+capacity protection, human authentication, and metric query runtimes from
+explicit Server command-line configuration.
 
 Each feature remains disabled when all of its settings are absent. Partial
 configuration fails before the HTTP listener starts.
@@ -37,6 +37,7 @@ func (f *stringListFlag) Set(value string) error {
 type metricBatchRuntimeConfig struct {
 	maxSnapshots int
 	maxBodyBytes int64
+	guard        storage.MetricWriteGuard
 }
 
 type checkpointRuntimeConfig struct {
@@ -51,6 +52,17 @@ type retentionRuntimeConfig struct {
 	receiptRetention time.Duration
 	deleteLimit      int
 	timeout          time.Duration
+}
+
+type capacityRuntimeConfig struct {
+	coreMaxBytes       int64
+	metricsSoftBytes   int64
+	metricsHardBytes   int64
+	filesystemMinBytes int64
+}
+
+func (c capacityRuntimeConfig) disabled() bool {
+	return c.coreMaxBytes == 0 && c.metricsSoftBytes == 0 && c.metricsHardBytes == 0 && c.filesystemMinBytes == 0
 }
 
 func (c retentionRuntimeConfig) disabled() bool {
@@ -115,6 +127,19 @@ func openServerStorage(ctx context.Context, directory string) (*storage.Database
 	return storage.Open(ctx, directory)
 }
 
+func openServerStorageWithCapacity(ctx context.Context, directory string, config capacityRuntimeConfig) (*storage.Databases, error) {
+	if directory == "" {
+		if config.disabled() {
+			return nil, nil
+		}
+		return nil, errors.New("storage-dir and all positive capacity settings are required together")
+	}
+	if err := validateCapacityRuntimeConfig(config); err != nil {
+		return nil, err
+	}
+	return storage.OpenWithPageLimits(ctx, directory, config.coreMaxBytes, config.metricsHardBytes)
+}
+
 func buildCheckpointRuntime(databases *storage.Databases, config checkpointRuntimeConfig) (*storage.CheckpointManager, error) {
 	if databases == nil {
 		if config.disabled() {
@@ -162,6 +187,42 @@ func logRetentionObservation(observation storage.RetentionObservation) {
 	log.Printf("component=storage level=INFO raw_cutoff=%q receipt_cutoff=%q deleted_snapshots=%d deleted_receipts=%d duration=%q msg=%q", observation.RawCutoff, observation.ReceiptCutoff, observation.DeletedSnapshots, observation.DeletedReceipts, observation.Duration, "bounded metric retention completed")
 }
 
+func buildCapacityRuntime(ctx context.Context, databases *storage.Databases, retention *storage.MetricRetentionManager, checkpoint *storage.CheckpointManager, config capacityRuntimeConfig) (*storage.CapacityManager, error) {
+	if databases == nil {
+		if config.disabled() {
+			return nil, nil
+		}
+		return nil, errors.New("storage-dir and all positive capacity settings are required together")
+	}
+	if retention == nil || checkpoint == nil {
+		return nil, errors.New("storage retention and checkpoint maintenance are required for capacity management")
+	}
+	if err := validateCapacityRuntimeConfig(config); err != nil {
+		return nil, err
+	}
+	return storage.NewCapacityManager(ctx, databases, storage.CapacityConfig{
+		CoreMaxBytes: config.coreMaxBytes, MetricsSoftBytes: config.metricsSoftBytes,
+		MetricsHardBytes: config.metricsHardBytes, FilesystemMinBytes: config.filesystemMinBytes,
+	}, retention, checkpoint, logCapacityObservation)
+}
+
+func validateCapacityRuntimeConfig(config capacityRuntimeConfig) error {
+	if config.coreMaxBytes < 1 || config.metricsSoftBytes < 1 || config.metricsHardBytes <= config.metricsSoftBytes || config.filesystemMinBytes < 1 {
+		return errors.New("storage-dir, positive capacity settings, and metrics soft bytes below hard bytes are required together")
+	}
+	return nil
+}
+
+func logCapacityObservation(observation storage.CapacityObservation) {
+	level := "INFO"
+	if observation.Level == "hard" || observation.Err != nil {
+		level = "ERROR"
+	} else if observation.Level == "soft" {
+		level = "WARN"
+	}
+	log.Printf("component=storage level=%s capacity=%q metrics_used_bytes=%d metrics_allocated_bytes=%d metrics_wal_bytes=%d filesystem_free_bytes=%d incoming_bytes=%d cleanup_attempted=%t recovery_deferred=%t deleted_snapshots=%d deleted_receipts=%d error=%q msg=%q", level, observation.Level, observation.MetricsUsedBytes, observation.MetricsAllocatedBytes, observation.MetricsWALBytes, observation.FilesystemFreeBytes, observation.IncomingBytes, observation.CleanupAttempted, observation.RecoveryDeferred, observation.DeletedSnapshots, observation.DeletedReceipts, observation.Err, "metric storage capacity evaluated")
+}
+
 func restoreMetricCurrentState(ctx context.Context, databases *storage.Databases, store *server.Store) (int, error) {
 	if databases == nil {
 		return 0, nil
@@ -192,7 +253,7 @@ func buildMetricBatchRuntime(databases *storage.Databases, api *server.Handler, 
 	if databases == nil || config.maxSnapshots < 1 || config.maxBodyBytes < 1 {
 		return nil, errors.New("storage-dir and positive metrics batch limits must be configured together")
 	}
-	writer, err := storage.NewMetricBatchWriter(databases.Metrics, config.maxSnapshots)
+	writer, err := storage.NewMetricBatchWriterWithGuard(databases.Metrics, config.maxSnapshots, config.guard)
 	if err != nil {
 		return nil, err
 	}
