@@ -52,8 +52,13 @@ func (h *PluginArtifactHandler) Download(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusUnauthorized, "DEVICE_UNAUTHORIZED", "device credentials are invalid")
 		return
 	}
+	states, err := h.store.DesiredForDeviceContext(r.Context(), deviceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "PLUGIN_STATE_UNAVAILABLE", "plugin desired state is unavailable")
+		return
+	}
 	allowed := false
-	for _, state := range h.store.DesiredForDevice(deviceID) {
+	for _, state := range states {
 		if state.Enabled && state.PluginID == key.PluginID && state.Version == key.Version && state.Artifact.Key(state.PluginID, state.Version) == key {
 			allowed = true
 			break

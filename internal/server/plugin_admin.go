@@ -7,17 +7,19 @@ to an immutable package already present in the local artifact repository.
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/audit"
+	"github.com/DingZhizCA/homelab-monitor/internal/auth"
 	"github.com/DingZhizCA/homelab-monitor/internal/plugins"
 )
 
 // PluginDesiredStateWriter persists a Server-authored plugin target.
 type PluginDesiredStateWriter interface {
-	SetDesiredWithAudit(plugins.DesiredState, audit.Event) error
+	SetDesiredWithAuditContext(context.Context, plugins.DesiredState, audit.Event) error
 }
 
 // PluginAdminHandler accepts one Owner-authored desired-state revision.
@@ -63,8 +65,14 @@ func (h *PluginAdminHandler) SetDesired(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "AUDIT_UNAVAILABLE", "plugin desired state could not be audited")
 		return
 	}
-	if err := h.store.SetDesiredWithAudit(state, event); err != nil {
-		writeError(w, http.StatusConflict, "DESIRED_STATE_CONFLICT", err.Error())
+	if err := h.store.SetDesiredWithAuditContext(r.Context(), state, event); err != nil {
+		if errors.Is(err, auth.ErrForbidden) {
+			writeError(w, http.StatusForbidden, "FORBIDDEN", "the current account is no longer an active Owner")
+		} else if errors.Is(err, plugins.ErrStateConflict) {
+			writeError(w, http.StatusConflict, "DESIRED_STATE_CONFLICT", err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "PLUGIN_STATE_UNAVAILABLE", "plugin desired state could not be stored")
+		}
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)

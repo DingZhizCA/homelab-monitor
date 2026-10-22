@@ -20,10 +20,11 @@ import (
 
 const storageTimeLayout = "2006-01-02T15:04:05.000000000Z"
 
-var coreMigrations = []Migration{{
-	Version: 1,
-	Name:    "human_accounts_sessions_and_audit",
-	SQL: `CREATE TABLE users (
+var coreMigrations = []Migration{
+	{
+		Version: 1,
+		Name:    "human_accounts_sessions_and_audit",
+		SQL: `CREATE TABLE users (
 		user_id TEXT PRIMARY KEY,
 		username TEXT NOT NULL UNIQUE,
 		role TEXT NOT NULL CHECK (role IN ('owner', 'viewer')),
@@ -47,7 +48,34 @@ var coreMigrations = []Migration{{
 		resource_id TEXT NOT NULL
 	);
 	CREATE INDEX audit_events_time ON audit_events (occurred_at, event_id);`,
-}}
+	},
+	{
+		Version: 2,
+		Name:    "plugin_desired_and_reported_state",
+		SQL: `CREATE TABLE plugin_desired_states (
+		device_id TEXT NOT NULL,
+		plugin_id TEXT NOT NULL,
+		revision INTEGER NOT NULL CHECK (revision > 0),
+		version TEXT NOT NULL,
+		artifact_os TEXT NOT NULL,
+		artifact_arch TEXT NOT NULL,
+		artifact_sha256 TEXT NOT NULL,
+		enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+		PRIMARY KEY (device_id, plugin_id)
+	);
+	CREATE INDEX plugin_desired_device ON plugin_desired_states (device_id, plugin_id);
+	CREATE TABLE plugin_reported_states (
+		device_id TEXT NOT NULL,
+		plugin_id TEXT NOT NULL,
+		observed_revision INTEGER NOT NULL CHECK (observed_revision >= 0),
+		applied_revision INTEGER NOT NULL CHECK (applied_revision >= 0 AND applied_revision <= observed_revision),
+		lifecycle_state TEXT NOT NULL,
+		refusal_reason TEXT NOT NULL,
+		PRIMARY KEY (device_id, plugin_id)
+	);
+	CREATE INDEX plugin_reported_device ON plugin_reported_states (device_id, plugin_id);`,
+	},
+}
 
 // AuthRepository implements the auth user and session persistence boundaries.
 type AuthRepository struct {

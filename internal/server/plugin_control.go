@@ -8,6 +8,7 @@ administrative state mutation routes.
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -17,8 +18,8 @@ import (
 
 // PluginStateStore is the persistence boundary used by the Agent control handlers.
 type PluginStateStore interface {
-	DesiredForDevice(deviceID string) []plugins.DesiredState
-	SetReportedBatch(states []plugins.ReportedState) error
+	DesiredForDeviceContext(context.Context, string) ([]plugins.DesiredState, error)
+	SetReportedBatchContext(context.Context, []plugins.ReportedState) error
 }
 
 // PluginControlHandler serves device-scoped plugin state polling and reporting.
@@ -55,7 +56,11 @@ func (h *PluginControlHandler) Desired(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "DEVICE_UNAUTHORIZED", "device credentials are invalid")
 		return
 	}
-	states := h.store.DesiredForDevice(deviceID)
+	states, err := h.store.DesiredForDeviceContext(r.Context(), deviceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "PLUGIN_STATE_UNAVAILABLE", "plugin desired state is unavailable")
+		return
+	}
 	if states == nil {
 		states = []plugins.DesiredState{}
 	}
@@ -96,8 +101,16 @@ func (h *PluginControlHandler) Reported(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	if err := h.store.SetReportedBatch(batch.States); err != nil {
+	if err := plugins.ValidateReportedBatch(batch.States); err != nil {
 		writeError(w, http.StatusConflict, "INVALID_PLUGIN_STATE", err.Error())
+		return
+	}
+	if err := h.store.SetReportedBatchContext(r.Context(), batch.States); err != nil {
+		if errors.Is(err, plugins.ErrStateConflict) {
+			writeError(w, http.StatusConflict, "INVALID_PLUGIN_STATE", err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "PLUGIN_STATE_UNAVAILABLE", "plugin reported state could not be stored")
+		}
 		return
 	}
 	writeJSON(w, http.StatusAccepted, struct {

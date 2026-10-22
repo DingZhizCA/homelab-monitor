@@ -7,6 +7,7 @@ it does not install artifacts or claim durable state across process restarts.
 package plugins
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/DingZhizCA/homelab-monitor/internal/audit"
 )
+
+const maxRevision = uint64(1<<63 - 1)
 
 // DesiredState is the Server-authored target for one device and plugin.
 type DesiredState struct {
@@ -39,8 +42,8 @@ func (reference ArtifactReference) Key(pluginID, version string) ArtifactKey {
 
 // Validate checks that an enabled target names an immutable, platform-specific package.
 func (state DesiredState) Validate() error {
-	if strings.TrimSpace(state.DeviceID) == "" || strings.TrimSpace(state.DeviceID) != state.DeviceID || !identifierPattern.MatchString(state.PluginID) || state.Revision == 0 {
-		return errors.New("trimmed device_id, valid plugin_id, and non-zero revision are required")
+	if strings.TrimSpace(state.DeviceID) == "" || strings.TrimSpace(state.DeviceID) != state.DeviceID || !identifierPattern.MatchString(state.PluginID) || state.Revision == 0 || state.Revision > maxRevision {
+		return errors.New("trimmed device_id, valid plugin_id, and revision between 1 and 2^63-1 are required")
 	}
 	if !state.Enabled {
 		return nil
@@ -65,6 +68,9 @@ type ReportedState struct {
 }
 
 type registryKey struct{ deviceID, pluginID string }
+
+// ErrStateConflict identifies stale or conflicting plugin state revisions.
+var ErrStateConflict = errors.New("plugin state revision conflicts with current state")
 
 const (
 	// DesiredStateAuditAction identifies an Owner publication of plugin intent.
@@ -101,10 +107,10 @@ func (r *Registry) SetDesired(state DesiredState) error {
 	defer r.mu.Unlock()
 	current, ok := r.desired[k]
 	if ok && state.Revision < current.Revision {
-		return fmt.Errorf("desired revision %d is older than current revision %d", state.Revision, current.Revision)
+		return fmt.Errorf("%w: desired revision %d is older than current revision %d", ErrStateConflict, state.Revision, current.Revision)
 	}
 	if ok && state.Revision == current.Revision && state != current {
-		return fmt.Errorf("desired revision %d conflicts with current state", state.Revision)
+		return fmt.Errorf("%w: desired revision %d conflicts with current state", ErrStateConflict, state.Revision)
 	}
 	r.desired[k] = state
 	return nil
@@ -126,17 +132,22 @@ func (r *Registry) SetDesiredWithAudit(state DesiredState, event audit.Event) er
 	defer r.mu.Unlock()
 	current, exists := r.desired[key]
 	if exists && state.Revision < current.Revision {
-		return fmt.Errorf("desired revision %d is older than current revision %d", state.Revision, current.Revision)
+		return fmt.Errorf("%w: desired revision %d is older than current revision %d", ErrStateConflict, state.Revision, current.Revision)
 	}
 	if exists && state.Revision == current.Revision {
 		if state != current {
-			return fmt.Errorf("desired revision %d conflicts with current state", state.Revision)
+			return fmt.Errorf("%w: desired revision %d conflicts with current state", ErrStateConflict, state.Revision)
 		}
 		return nil
 	}
 	r.desired[key] = state
 	r.audits = append(r.audits, event)
 	return nil
+}
+
+// SetDesiredWithAuditContext exposes the storage-neutral context-aware writer boundary.
+func (r *Registry) SetDesiredWithAuditContext(_ context.Context, state DesiredState, event audit.Event) error {
+	return r.SetDesiredWithAudit(state, event)
 }
 
 // AuditEvents returns a copy of development-only in-memory management events.
@@ -168,6 +179,11 @@ func (r *Registry) DesiredForDevice(deviceID string) []DesiredState {
 	return states
 }
 
+// DesiredForDeviceContext exposes the storage-neutral context-aware reader boundary.
+func (r *Registry) DesiredForDeviceContext(_ context.Context, deviceID string) ([]DesiredState, error) {
+	return r.DesiredForDevice(deviceID), nil
+}
+
 // SetReported records the Agent's observed and applied revisions independently.
 func (r *Registry) SetReported(state ReportedState) error {
 	return r.SetReportedBatch([]ReportedState{state})
@@ -175,26 +191,15 @@ func (r *Registry) SetReported(state ReportedState) error {
 
 // SetReportedBatch validates every update before committing any of them.
 func (r *Registry) SetReportedBatch(states []ReportedState) error {
-	seen := make(map[registryKey]struct{}, len(states))
-	for _, state := range states {
-		if strings.TrimSpace(state.DeviceID) == "" || strings.TrimSpace(state.DeviceID) != state.DeviceID || !identifierPattern.MatchString(state.PluginID) || !ValidLifecycleState(state.Lifecycle) {
-			return errors.New("trimmed device_id, valid plugin_id, and valid lifecycle_state are required")
-		}
-		if state.AppliedRev > state.ObservedRev {
-			return errors.New("applied revision cannot exceed observed revision")
-		}
-		key := registryKey{state.DeviceID, state.PluginID}
-		if _, ok := seen[key]; ok {
-			return fmt.Errorf("reported batch contains duplicate plugin %q for device %q", state.PluginID, state.DeviceID)
-		}
-		seen[key] = struct{}{}
+	if err := ValidateReportedBatch(states); err != nil {
+		return err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, state := range states {
 		key := registryKey{state.DeviceID, state.PluginID}
 		if current, ok := r.reported[key]; ok && state.ObservedRev < current.ObservedRev {
-			return fmt.Errorf("observed revision %d is older than current revision %d", state.ObservedRev, current.ObservedRev)
+			return fmt.Errorf("%w: observed revision %d is older than current revision %d", ErrStateConflict, state.ObservedRev, current.ObservedRev)
 		}
 	}
 	for _, state := range states {
@@ -202,6 +207,30 @@ func (r *Registry) SetReportedBatch(states []ReportedState) error {
 		r.reported[key] = state
 	}
 	return nil
+}
+
+// ValidateReportedBatch checks identity, lifecycle, revision, and duplicate constraints.
+func ValidateReportedBatch(states []ReportedState) error {
+	seen := make(map[registryKey]struct{}, len(states))
+	for _, state := range states {
+		if strings.TrimSpace(state.DeviceID) == "" || strings.TrimSpace(state.DeviceID) != state.DeviceID || !identifierPattern.MatchString(state.PluginID) || !ValidLifecycleState(state.Lifecycle) {
+			return errors.New("trimmed device_id, valid plugin_id, and valid lifecycle_state are required")
+		}
+		if state.ObservedRev > maxRevision || state.AppliedRev > state.ObservedRev {
+			return errors.New("reported revisions must fit signed 64-bit storage and applied revision cannot exceed observed revision")
+		}
+		key := registryKey{state.DeviceID, state.PluginID}
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("reported batch contains duplicate plugin %q for device %q", state.PluginID, state.DeviceID)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// SetReportedBatchContext exposes the storage-neutral context-aware writer boundary.
+func (r *Registry) SetReportedBatchContext(_ context.Context, states []ReportedState) error {
+	return r.SetReportedBatch(states)
 }
 
 // Reported returns the latest local report for a device/plugin pair.

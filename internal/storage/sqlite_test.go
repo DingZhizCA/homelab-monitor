@@ -28,6 +28,9 @@ func TestOpenCreatesIsolatedDatabasesWithApprovedSettings(t *testing.T) {
 	if databases.CorePath == databases.MetricsPath {
 		t.Fatal("core and metrics databases use the same file")
 	}
+	if maximum := databases.Core.Stats().MaxOpenConnections; maximum != 1 {
+		t.Fatalf("core max open connections=%d", maximum)
+	}
 	for _, path := range []string{databases.CorePath, databases.MetricsPath} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("database file %s: %v", path, err)
@@ -38,7 +41,7 @@ func TestOpenCreatesIsolatedDatabasesWithApprovedSettings(t *testing.T) {
 	for name, fixture := range map[string]struct {
 		database *sql.DB
 		want     int
-	}{"core": {databases.Core, 1}, "metrics": {databases.Metrics, 2}} {
+	}{"core": {databases.Core, 2}, "metrics": {databases.Metrics, 2}} {
 		var count int
 		if err := fixture.database.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 			t.Fatalf("%s migration ledger: %v", name, err)
@@ -131,7 +134,7 @@ func TestApplyMigrationsIsTransactionalAndIdempotent(t *testing.T) {
 		t.Fatalf("repeat migrations: %v", err)
 	}
 	var count int
-	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 2 {
+	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 3 {
 		t.Fatalf("migration count=%d err=%v", count, err)
 	}
 

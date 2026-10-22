@@ -15,6 +15,7 @@ import (
 
 	"github.com/DingZhizCA/homelab-monitor/internal/auth"
 	"github.com/DingZhizCA/homelab-monitor/internal/dashboard"
+	"github.com/DingZhizCA/homelab-monitor/internal/plugins"
 	"github.com/DingZhizCA/homelab-monitor/internal/server"
 	"github.com/DingZhizCA/homelab-monitor/internal/storage"
 )
@@ -58,6 +59,29 @@ type authRuntime struct {
 	handler *server.AuthHandler
 	queries *server.MetricQueryHandler
 	history *server.MetricHistoryHandler
+}
+
+type pluginRuntimeConfig struct {
+	artifactDirectory string
+	maxArtifactBytes  int64
+}
+
+func (c pluginRuntimeConfig) disabled() bool {
+	return c.artifactDirectory == "" && c.maxArtifactBytes == 0
+}
+
+type pluginRuntime struct {
+	control    *server.PluginControlHandler
+	artifacts  *server.PluginArtifactHandler
+	admin      *server.PluginAdminHandler
+	repository *plugins.FileArtifactRepository
+}
+
+func (r *pluginRuntime) Close() error {
+	if r == nil || r.repository == nil {
+		return nil
+	}
+	return r.repository.Close()
 }
 
 func openServerStorage(ctx context.Context, directory string) (*storage.Databases, error) {
@@ -150,4 +174,41 @@ func buildAuthRuntime(databases *storage.Databases, current dashboard.SnapshotSo
 		return nil, err
 	}
 	return &authRuntime{handler: handler, queries: queries, history: history}, nil
+}
+
+func buildPluginRuntime(databases *storage.Databases, devices server.DeviceAuthorizer, humanAuth *authRuntime, config pluginRuntimeConfig) (*pluginRuntime, error) {
+	if config.disabled() {
+		return nil, nil
+	}
+	if databases == nil || devices == nil || humanAuth == nil || config.artifactDirectory == "" || config.maxArtifactBytes < 1 {
+		return nil, errors.New("storage, device authentication, human authentication, plugin artifact directory, and positive artifact limit are required together")
+	}
+	state, err := storage.NewPluginRepository(databases.Core)
+	if err != nil {
+		return nil, err
+	}
+	artifacts, err := plugins.NewFileArtifactRepository(config.artifactDirectory, config.maxArtifactBytes)
+	if err != nil {
+		return nil, err
+	}
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			_ = artifacts.Close()
+		}
+	}()
+	control, err := server.NewPluginControlHandler(state, devices)
+	if err != nil {
+		return nil, err
+	}
+	download, err := server.NewPluginArtifactHandler(state, artifacts, devices)
+	if err != nil {
+		return nil, err
+	}
+	admin, err := server.NewPluginAdminHandler(state, artifacts)
+	if err != nil {
+		return nil, err
+	}
+	closeOnError = false
+	return &pluginRuntime{control: control, artifacts: download, admin: admin, repository: artifacts}, nil
 }

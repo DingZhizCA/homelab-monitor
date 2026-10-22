@@ -55,6 +55,8 @@ func run() error {
 	authLoginWindow := flag.Duration("auth-login-window", 0, "login limiter fixed-window duration")
 	historyMaxRange := flag.Duration("history-max-range", 0, "maximum time range for one historical metric query")
 	historyMaxPoints := flag.Int("history-max-points", 0, "maximum observations returned by one historical metric query")
+	pluginArtifactDirectory := flag.String("plugin-artifact-dir", "", "private immutable plugin artifact repository directory")
+	pluginMaxArtifactBytes := flag.Int64("plugin-max-artifact-bytes", 0, "maximum plugin artifact bytes read or served")
 	flag.Parse()
 	if (*tlsCert == "") != (*tlsKey == "") {
 		return errors.New("both tls-cert and tls-key are required")
@@ -121,11 +123,30 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	pluginsRuntime, err := buildPluginRuntime(databases, deviceAuthorizer, humanAuth, pluginRuntimeConfig{
+		artifactDirectory: *pluginArtifactDirectory,
+		maxArtifactBytes:  *pluginMaxArtifactBytes,
+	})
+	if err != nil {
+		return err
+	}
+	if pluginsRuntime != nil {
+		defer func() {
+			if err := pluginsRuntime.Close(); err != nil {
+				log.Printf("component=server level=ERROR msg=%q", err)
+			}
+		}()
+	}
 	options := server.RouterOptions{API: handler, MetricsBatch: metricsBatch, WebDirectory: *webDir}
 	if humanAuth != nil {
 		options.Auth = humanAuth.handler
 		options.MetricQueries = humanAuth.queries
 		options.MetricHistory = humanAuth.history
+	}
+	if pluginsRuntime != nil {
+		options.PluginControl = pluginsRuntime.control
+		options.PluginArtifacts = pluginsRuntime.artifacts
+		options.PluginAdmin = pluginsRuntime.admin
 	}
 	router, err := server.NewRouter(options)
 	if err != nil {

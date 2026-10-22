@@ -6,6 +6,9 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DingZhizCA/homelab-monitor/internal/plugins"
 	"github.com/DingZhizCA/homelab-monitor/internal/server"
 	"github.com/DingZhizCA/homelab-monitor/internal/testutil"
 )
@@ -32,6 +36,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if runtime, err := buildAuthRuntime(nil, nil, authRuntimeConfig{}); err != nil || runtime != nil {
 		t.Fatalf("disabled auth runtime=%v err=%v", runtime, err)
 	}
+	if runtime, err := buildPluginRuntime(nil, nil, nil, pluginRuntimeConfig{}); err != nil || runtime != nil {
+		t.Fatalf("disabled plugin runtime=%v err=%v", runtime, err)
+	}
 	for _, config := range []metricBatchRuntimeConfig{{maxSnapshots: 1}, {maxBodyBytes: 1024}} {
 		if handler, err := buildMetricBatchRuntime(nil, nil, config); err == nil || handler != nil {
 			t.Fatalf("partial metric config %+v handler=%v err=%v", config, handler, err)
@@ -40,6 +47,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	partialAuth := authRuntimeConfig{origins: []string{"https://monitor.example"}}
 	if runtime, err := buildAuthRuntime(nil, nil, partialAuth); err == nil || runtime != nil {
 		t.Fatalf("partial auth runtime=%v err=%v", runtime, err)
+	}
+	if runtime, err := buildPluginRuntime(nil, nil, nil, pluginRuntimeConfig{artifactDirectory: "/private/plugins"}); err == nil || runtime != nil {
+		t.Fatalf("partial plugin runtime=%v err=%v", runtime, err)
 	}
 }
 
@@ -99,7 +109,7 @@ func TestBuildMetricBatchRuntimePersistsAuthenticatedRetries(t *testing.T) {
 	}
 }
 
-func TestBuildAuthRuntimeConnectsBootstrapSessionCurrentAndHistoryRoutes(t *testing.T) {
+func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	directory := filepath.Join(testutil.TempDir(t), "storage")
 	databases, err := openServerStorage(context.Background(), directory)
 	if err != nil {
@@ -120,9 +130,41 @@ func TestBuildAuthRuntimeConnectsBootstrapSessionCurrentAndHistoryRoutes(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	artifactDirectory := filepath.Join(testutil.TempDir(t), "artifacts")
+	if err := os.Mkdir(artifactDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, artifactKey, err := plugins.SignPackage(privateKey, plugins.Manifest{
+		PluginID: "health", Version: "1.0.0", Publisher: "example.test",
+		Platform: plugins.Platform{OS: "linux", Arch: "amd64"}, Protocol: plugins.ProtocolRange{Min: 1, Max: 1},
+		Collectors: []plugins.CollectorSpec{{ID: "system"}},
+	}, []byte("plugin executable"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactRepository, err := plugins.NewFileArtifactRepository(artifactDirectory, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := artifactRepository.Put(artifactKey, bundle); err != nil {
+		t.Fatal(err)
+	}
+	if err := artifactRepository.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pluginsRuntime, err := buildPluginRuntime(databases, allowTestDevice{}, humanAuth, pluginRuntimeConfig{artifactDirectory: artifactDirectory, maxArtifactBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pluginsRuntime.Close() })
 	router, err := server.NewRouter(server.RouterOptions{
 		API: api, MetricsBatch: metricsBatch, Auth: humanAuth.handler,
 		MetricQueries: humanAuth.queries, MetricHistory: humanAuth.history,
+		PluginControl: pluginsRuntime.control, PluginArtifacts: pluginsRuntime.artifacts, PluginAdmin: pluginsRuntime.admin,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,6 +212,35 @@ func TestBuildAuthRuntimeConnectsBootstrapSessionCurrentAndHistoryRoutes(t *test
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"cpu.usage_percent"`) {
 			t.Fatalf("path=%s status=%d body=%s", path, response.Code, response.Body.String())
 		}
+	}
+
+	desiredBody, err := json.Marshal(plugins.DesiredState{
+		DeviceID: "node-a", PluginID: "health", Revision: 1, Version: artifactKey.Version,
+		Artifact: plugins.ArtifactReference{Platform: artifactKey.Platform, SHA256: artifactKey.SHA256}, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = authenticatedMutationRequest(http.MethodPut, "/api/v1/owner/plugins/desired", string(desiredBody))
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("plugin desired status=%d body=%s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "https://monitor.example/api/v1/agent/plugins/desired?device_id=node-a", nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"plugin_id":"health"`) {
+		t.Fatalf("plugin poll status=%d body=%s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "https://monitor.example/api/v1/agent/plugins/artifact?device_id=node-a&plugin_id=health&version=1.0.0&os=linux&arch=amd64&sha256="+artifactKey.SHA256, nil)
+	request.Header.Set("Authorization", "Bearer test-token")
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "plugin executable") {
+		t.Fatalf("plugin artifact status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

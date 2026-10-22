@@ -16,7 +16,7 @@ Agent 将 `plugins.max_artifact_bytes` 显式传入 Stager；Stage 拒绝超限�
 
 `plugins.SignPackage` 提供显式调用的发行构建步骤：计算二进制摘要、验证 Manifest、生成规范 JSON，再用调用方传入的 Ed25519 私钥签名并返回 ArtifactKey。它不加载或保存私钥，不负责制品大小限制或发布审批；发行流水线必须在受控环境管理私钥。
 
-仓库内 `cmd/plugin-pack` 将该流程封装为本地工具。调用者显式传入 Manifest 模板、构建产物、私钥文件、输出路径和最大产物字节数；私钥必须是权限不向 group/other 开放的可读普通文件，父目录不得由 group/other 写入，工具通过受控目录句柄打开并核对文件身份。输出路径必须不存在，生成的 bundle 目录为 `0700`、内部文件为 `0600`。工具不启动产物，也不将其传到 Server。示例：
+仓库内 `cmd/plugin-pack` 将该流程封装为本地工具。调用者显式传入 Manifest 模板、构建产物、私钥文件、输出路径和最大产物字节数；私钥必须是权限不向 group/other 开放的可读普通文件，父目录不得由 group/other 写入，工具通过受控目录句柄打开并核对文件身份。输出路径必须不存在，生成的 bundle 目录为 `0700`、内部文件为 `0600`。可选 `-repository` 指向现有私有绝对路径，将同一 bundle 通过 `FileArtifactRepository.Put` 原子导入 Server 内容寻址仓库；本地输出仍保留供审查。工具不启动产物，也不创建或启用 Desired State。示例：
 
 ```sh
 go run ./cmd/plugin-pack \
@@ -24,6 +24,7 @@ go run ./cmd/plugin-pack \
   -artifact ./dist/plugin-linux-arm64 \
   -private-key /protected/path/publisher.ed25519 \
   -output ./dist/signed-bundle \
+  -repository /private/server/plugin-artifacts \
   -max-artifact-bytes "$MAX_ARTIFACT_BYTES"
 ```
 
@@ -31,7 +32,7 @@ go run ./cmd/plugin-pack \
 
 受认证的 Agent 下载端点使用 HTTPS，并以 multipart/form-data 返回 `manifest.json`、`manifest.sig` 和 `artifact` 三个部分。设备只能读取自己当前启用 Desired State 指向的确切制品。Agent 客户端限制响应体和各部分大小，校验规范 Manifest、制品摘要、版本和平台；`plugins.Reconciler` 在暂存前再次检查包身份，再由 Stager 使用本机信任根验签，并由 PluginManager 准备进程、检查协议和健康状态。升级先停止旧实例；新版本启动失败时尝试重新准备原版本，禁用状态会停止对应进程。控制器只处理显式传入的状态批次，不创建轮询定时器或改变指标采样周期。
 
-仓库、Handler、客户端和可注入 Reconciler 都有本地测试；Agent—Server 的集成测试覆盖签名制品下载及发行方验签。`PluginAdminHandler` 已提供 Owner Desired State 写入口：仅在 Router 注入 Auth Handler 时挂载，并通过 HTTPS、允许的 Origin 和 Owner 会话校验；启用目标在发布前必须已存在于制品仓库。Handler 从认证 Context 取得 Owner ID，Registry 在同一锁内提交新 Desired Revision 和无秘密载荷的审计事件；幂等重试不重复记录，校验、制品或修订冲突失败不提交状态或成功事件。`cmd/server` 尚未装配该控制链，Desired State 与事件仍只有内存 Registry、没有持久化实现，因此重启会丢失状态，当前不能执行在线安装。
+仓库、Handler、客户端和可注入 Reconciler 都有本地测试；Agent—Server 的集成测试覆盖签名制品下载及发行方验签。`PluginAdminHandler` 提供 Owner Desired State 写入口：仅在 Router 注入 Auth Handler 时挂载，并通过 HTTPS、允许的 Origin 和 Owner 会话校验；启用目标在发布前必须已存在于制品仓库。Handler 从认证 Context 取得 Owner ID，SQLite `PluginRepository` 在同一事务中复查当前 Owner、提交新 Desired Revision 和无秘密载荷的审计事件；幂等重试不重复记录，校验、制品或修订冲突失败不提交状态或成功事件。Reported 批次也先完成全部校验与旧 Revision 检查再原子提交。`cmd/server` 只有在 SQLite、人类认证、设备认证、私有制品目录和单制品上限全部显式配置时装配控制、制品与 Owner 路由；默认保持关闭。
 
 ## 升级过程
 1. Owner 在 Server 发起插件安装或版本升级申请，Server 进行基础资格预检并生成 Desired Revision。

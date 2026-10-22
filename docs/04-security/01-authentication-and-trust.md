@@ -28,14 +28,14 @@ Server 的认证、Dashboard、插件状态、磁盘刷新及指标写请求均�
 ## Agent 网络认证（推荐）
 TLS 强制验证 Server 身份；首版采用独立设备 Token（强随机、权限范围绑定、可撤销轮换），逐步支持 mTLS 的双向认证。一次性 enrollment token 仅用于设备初次获批注册。所有请求须授权到 Device ID 和相应 API，不允许枚举其他设备数据。
 
-当前实现接受 Server 启动参数 `-tls-cert` 与 `-tls-key` 直接提供 HTTPS；二者必须成对出现。可选 `-agent-credentials` 加载设备校验文件，并且该选项要求 HTTPS。文件仅保存令牌 SHA-256 摘要，JSON 结构为 `{"devices":[{"device_id":"n1","token_sha256":"<64位小写十六进制>"}]}`；文件必须是非符号链接的普通文件，权限仅允许所有者访问，父目录不能由 group/other 写入，JSON 对象重复键会被拒绝。Agent 只在 `server.token` 配置非空时发送 Bearer Token，且配置校验要求 `server.url` 使用 HTTPS。指标和插件控制客户端都不自动跟随 HTTP 重定向，避免把凭据请求转交给其他地址。当前这条启动接入只保护指标 API；插件控制路由仍未挂载，等待期望状态持久化实现。
+当前实现接受 Server 启动参数 `-tls-cert` 与 `-tls-key` 直接提供 HTTPS；二者必须成对出现。可选 `-agent-credentials` 加载设备校验文件，并且该选项要求 HTTPS。文件仅保存令牌 SHA-256 摘要，JSON 结构为 `{"devices":[{"device_id":"n1","token_sha256":"<64位小写十六进制>"}]}`；文件必须是非符号链接的普通文件，权限仅允许所有者访问，父目录不能由 group/other 写入，JSON 对象重复键会被拒绝。Agent 只在 `server.token` 配置非空时发送 Bearer Token，且配置校验要求 `server.url` 使用 HTTPS。指标和插件控制客户端都不自动跟随 HTTP 重定向，避免把凭据请求转交给其他地址。插件控制路由启用时复用逐设备凭据，并要求持久化人类认证、私有制品目录和显式单制品上限同时存在。
 
 **当前兼容边界：**若 Server 未配置 `-agent-credentials`，指标 API 不强制设备 Token，也不要求 HTTPS；这是为既有本地运行协议保留的兼容模式，不能视为已启用 Agent 身份认证。部署到受信任网络之前应配置 HTTPS 与逐设备凭据；若要改成默认强制，需要先迁移现有 Agent 配置和凭据分发方式。
 
 ## Plugin 权限
 插件系统本地 RPC、操作系统权限与 Server 控制权限彼此分离。原生独立进程不可视为绝对沙箱；危险插件需要严格来源授权、资源限制及最小文件/网络访问。插件无权直接获取用户 Session、Agent Token 或 Newifi 私钥。
 
-当前代码的 `GrantAuthorizer` 要求每个插件包的 plugin ID 与 publisher 命中显式本机 grant；grant 可为空权限列表，以批准包身份但不授予额外能力。Manifest 声明的每项 capability 还必须是该 grant 的子集。`LoadGrantAuthorizer` 可从受保护 JSON 文件加载策略，格式为 `{"grants":[{"plugin_id":"network","publisher":"trusted.example","permissions":["read:proc"]}]}`。文件要求非符号链接普通文件、owner-readable 且 group/other 无权限，父目录不可由 group/other 写入，最大 1 MiB，未知字段、多余 JSON 值和对象重复键会拒绝。`LoadPublisherPublicKey` 从受保护文件读取原始 32-byte Ed25519 公钥；`NewPluginRuntime` 显式装配该信任根、本机 grants、Stager、Supervisor、PluginManager、Reconciler 和 Agent HTTPS 控制客户端。`cmd/agent` 只有在 `plugins.enabled` 明确开启且所有安全/资源参数均提供时才启动独立控制轮询；指标采样周期不受影响。Server 插件控制路由尚未在 `cmd/server` 挂载，不能据此认为插件分发已端到端启用。授权前置门及同 UID 进程管理不能替代 UID/cgroup/其他内核隔离；Owner 管理 UI 与 OS 能力限制仍未实现。
+当前代码的 `GrantAuthorizer` 要求每个插件包的 plugin ID 与 publisher 命中显式本机 grant；grant 可为空权限列表，以批准包身份但不授予额外能力。Manifest 声明的每项 capability 还必须是该 grant 的子集。`LoadGrantAuthorizer` 可从受保护 JSON 文件加载策略，格式为 `{"grants":[{"plugin_id":"network","publisher":"trusted.example","permissions":["read:proc"]}]}`。文件要求非符号链接普通文件、owner-readable 且 group/other 无权限，父目录不可由 group/other 写入，最大 1 MiB，未知字段、多余 JSON 值和对象重复键会拒绝。`LoadPublisherPublicKey` 从受保护文件读取原始 32-byte Ed25519 公钥；`NewPluginRuntime` 显式装配该信任根、本机 grants、Stager、Supervisor、PluginManager、Reconciler 和 Agent HTTPS 控制客户端。`cmd/agent` 只有在 `plugins.enabled` 明确开启且所有安全/资源参数均提供时才启动独立控制轮询；指标采样周期不受影响。Server 可显式装配持久化插件控制链，但本地测试不等于目标设备验收。授权前置门及同 UID 进程管理不能替代 UID/cgroup/其他内核隔离；Owner 管理 UI 与 OS 能力限制仍未实现。
 
 ## 管理操作与审计
 插件安装/升级、密钥轮换、规则发布/回滚、身份合并拆分、敏感诊断开启及历史删除需审计。日志不得记录密码、Token、SSH 私钥、完整 Push Endpoint 或敏感连接载荷。

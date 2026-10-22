@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -121,6 +122,53 @@ func TestPackEnforcesArtifactLimitAndPrivateKeyPermissions(t *testing.T) {
 	}
 	if _, err := readPrivateKey(filepath.Join(directoryLink, "publisher.key")); err == nil {
 		t.Fatal("private key reached through a symbolic-link directory was accepted")
+	}
+}
+
+func TestPublishBundleImportsImmutablePackageRepository(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bundleDirectory := filepath.Join(root, "bundle")
+	repositoryDirectory := filepath.Join(root, "repository")
+	if err := os.Mkdir(bundleDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(repositoryDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := []byte("signed executable")
+	manifest := plugins.Manifest{
+		PluginID: "health", Version: "1.0.0", Publisher: "example.test",
+		Platform: plugins.Platform{OS: "linux", Arch: "amd64"}, Protocol: plugins.ProtocolRange{Min: 1, Max: 1},
+		Collectors: []plugins.CollectorSpec{{ID: "system"}},
+	}
+	bundle, key, err := plugins.SignPackage(privateKey, manifest, artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(bundleDirectory, "manifest.json"), bundle.ManifestJSON, 0o600)
+	writeTestFile(t, filepath.Join(bundleDirectory, "manifest.sig"), bundle.Signature, 0o600)
+	writeTestFile(t, filepath.Join(bundleDirectory, "artifact"), bundle.Artifact, 0o600)
+	if err := publishBundle(bundleDirectory, repositoryDirectory, 1024); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := plugins.NewFileArtifactRepository(repositoryDirectory, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	stored, err := repository.Get(key)
+	if err != nil || !bytes.Equal(stored.Artifact, artifact) {
+		t.Fatalf("stored artifact=%q err=%v", stored.Artifact, err)
+	}
+	if err := publishBundle(bundleDirectory, repositoryDirectory, 1024); err != nil {
+		t.Fatalf("idempotent publish: %v", err)
 	}
 }
 

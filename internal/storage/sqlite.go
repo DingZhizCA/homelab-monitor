@@ -63,6 +63,10 @@ func Open(ctx context.Context, directory string) (*Databases, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open core database: %w", err)
 	}
+	// Serialize core.db access across independently constructed domain repositories.
+	// This avoids cross-repository SQLite writer collisions without a hidden retry timeout.
+	databases.Core.SetMaxOpenConns(1)
+	databases.Core.SetMaxIdleConns(1)
 	databases.Metrics, err = openSQLite(ctx, databases.MetricsPath, "NORMAL")
 	if err != nil {
 		_ = databases.Core.Close()

@@ -14,7 +14,7 @@ P0 原始业务 (Newifi NAT/Wi-Fi、N1 sing-box/Exit Node、Alienware 现有服�
 | N1 | Agent/多 Plugin Runtime 占 CPU/RSS、影响代理 | 系统级资源限制、低优先级调度、熔断 |
 | Alienware | 数据库写入、历史回放、Widget 查询、HDD 唤醒 | SSD 数据、查询并发上限、分层清理、休眠保护 |
 
-Agent 插件控制循环只有在 `plugins.enabled` 显式开启且信任密钥、grant、私有目录、制品大小、轮询周期和操作超时均显式配置时才启动。控制循环独立于指标采样循环，不主动触发 Collector；当前 Agent 端实现可选装配，但 `cmd/server` 尚未装配对应期望状态和制品路由，端到端功能未启用验收。
+Agent 插件控制循环只有在 `plugins.enabled` 显式开启且信任密钥、grant、私有目录、制品大小、轮询周期和操作超时均显式配置时才启动。控制循环独立于指标采样循环，不主动触发 Collector。Server 端只有在 SQLite、人类与设备认证、私有制品目录和单制品上限均显式配置时才挂载持久化 Desired/Reported、制品和 Owner 路由；默认关闭。该本地链路已有测试，但未在目标设备运行验收。
 
 Agent 批量指标队列也默认关闭。启用 `metrics_batch` 必须同时配置 HTTPS、设备 Token、队列快照数、队列内存字节数、单批快照数和请求体字节上限。该队列只在采样循环内发送，不增加采样频率或创建重试线程；发送失败保留 pending 批次，容量耗尽后拒绝新样本，进程退出丢失未确认内容。Server 端只有在同时显式配置 HTTPS、设备凭据、私有 SSD 存储目录、单批快照上限和请求体上限时才挂载 SQLite 批量写入路由；当前尚无自动清理、配额或 checkpoint 后台任务。
 

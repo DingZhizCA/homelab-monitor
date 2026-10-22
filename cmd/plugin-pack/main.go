@@ -28,12 +28,59 @@ func main() {
 	artifactPath := flag.String("artifact", "", "plugin executable artifact")
 	privateKeyPath := flag.String("private-key", "", "protected raw 64-byte Ed25519 private key")
 	outputDirectory := flag.String("output", "", "new private output directory")
+	repositoryDirectory := flag.String("repository", "", "optional existing private Server artifact repository")
 	maxArtifactBytes := flag.Int64("max-artifact-bytes", 0, "required maximum input artifact size")
 	flag.Parse()
 	if err := pack(*manifestPath, *artifactPath, *privateKeyPath, *outputDirectory, *maxArtifactBytes); err != nil {
 		fmt.Fprintln(os.Stderr, "plugin-pack:", err)
 		os.Exit(1)
 	}
+	if *repositoryDirectory != "" {
+		if err := publishBundle(*outputDirectory, *repositoryDirectory, *maxArtifactBytes); err != nil {
+			fmt.Fprintln(os.Stderr, "plugin-pack:", err)
+			os.Exit(1)
+		}
+	}
+}
+
+func publishBundle(bundleDirectory, repositoryDirectory string, maxArtifactBytes int64) error {
+	if bundleDirectory == "" || repositoryDirectory == "" || maxArtifactBytes < 1 {
+		return errors.New("bundle, repository, and positive max-artifact-bytes are required")
+	}
+	bundle := plugins.PackageArtifact{}
+	var err error
+	if bundle.ManifestJSON, err = readBoundedFile(filepath.Join(bundleDirectory, "manifest.json"), maxManifestBytes); err != nil {
+		return fmt.Errorf("read bundle manifest: %w", err)
+	}
+	if bundle.Signature, err = readBoundedFile(filepath.Join(bundleDirectory, "manifest.sig"), ed25519.SignatureSize); err != nil {
+		return fmt.Errorf("read bundle signature: %w", err)
+	}
+	if bundle.Artifact, err = readBoundedFile(filepath.Join(bundleDirectory, "artifact"), maxArtifactBytes); err != nil {
+		return fmt.Errorf("read bundle artifact: %w", err)
+	}
+	var manifest plugins.Manifest
+	decoder := json.NewDecoder(bytes.NewReader(bundle.ManifestJSON))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return fmt.Errorf("decode bundle manifest: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("bundle manifest must contain exactly one JSON value")
+	}
+	key := plugins.ArtifactKey{PluginID: manifest.PluginID, Version: manifest.Version, Platform: manifest.Platform, SHA256: manifest.ArtifactSHA256}
+	repository, err := plugins.NewFileArtifactRepository(repositoryDirectory, maxArtifactBytes)
+	if err != nil {
+		return err
+	}
+	putErr := repository.Put(key, bundle)
+	closeErr := repository.Close()
+	if putErr != nil {
+		return fmt.Errorf("publish bundle to repository: %w", putErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close plugin artifact repository: %w", closeErr)
+	}
+	return nil
 }
 
 func pack(manifestPath, artifactPath, privateKeyPath, outputDirectory string, maxArtifactBytes int64) error {
