@@ -32,7 +32,7 @@ HTTPS + Agent 主动轮询。数据平面使用限额批量 POST；控制平面�
 | Control | 期望状态与上报结果 | 版本校验、审计、重放防护 |
 | Artifact | 制品下载与校验 | 哈希、签名、限速、断点策略待定 |
 
-指标兼容接口为 `POST /api/v1/metrics`，接收一个 MetricEnvelope。新增 `POST /api/v1/metrics/batch` 接收 `{batch_id, device_id, snapshots}`，要求同设备、样本时间严格递增；调用方显式配置最大快照数和请求体字节数。路由必须绑定 HTTPS 设备 Token，并注入支持原子追加和按 batch ID 幂等去重的历史写入器。Agent 有显式快照条数、队列字节数、批次条数及请求体大小限制的内存 `BatchQueue` 和 `SendBatch` API，`SendPending` 按调用方触发单次发送，只有收到有效接收响应才确认队列内容；pending 批次可在确认前以相同 ID 重试。`cmd/agent` 已提供默认关闭的 `metrics_batch` 装配，只有 HTTPS、设备 Token 和全部容量上限显式有效时才启用；队列仍不持久化、不创建独立采样或发送定时器，队列满会拒绝新样本。Server 批量 Handler 在并发乱序上报时仅将采集时间晚于现有当前态的样本发布为最新状态。Server 没有生产历史写入器，`cmd/server` 也未挂载该可选路由；所以当前只完成 Agent 侧可选运行装配和协议测试，不代表线上批量通路已启用。
+指标兼容接口为 `POST /api/v1/metrics`，接收一个 MetricEnvelope。新增 `POST /api/v1/metrics/batch` 接收 `{batch_id, device_id, snapshots}`，要求同设备、样本时间严格递增；调用方显式配置最大快照数和请求体字节数。路由必须绑定 HTTPS 设备 Token，并注入支持原子追加和按 batch ID 幂等去重的历史写入器。Agent 有显式快照条数、队列字节数、批次条数及请求体大小限制的内存 `BatchQueue` 和 `SendBatch` API，`SendPending` 按调用方触发单次发送，只有收到有效接收响应才确认队列内容；pending 批次可在确认前以相同 ID 重试。`cmd/agent` 已提供默认关闭的 `metrics_batch` 装配，只有 HTTPS、设备 Token 和全部容量上限显式有效时才启用；队列仍不持久化、不创建独立采样或发送定时器，队列满会拒绝新样本。Server 批量 Handler 在并发乱序上报时仅将采集时间晚于现有当前态的样本发布为最新状态。`cmd/server` 现可在同时显式配置 HTTPS、设备凭据、私有 SSD 存储目录、单批快照上限和请求体上限时挂载该路由；SQLite 写入器将批次摘要与完整快照在 `metrics.db` 的同一事务中提交，并在重启后继续按 batch ID 去重。所有相关参数为空时保持原有单快照兼容接口，不创建数据库。
 
 ## 插件状态 API 初始边界
 Server 内部提供以下 Agent 插件状态 Handler，作为 P1 控制面接口基础：

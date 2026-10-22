@@ -32,13 +32,16 @@ func TestOpenCreatesIsolatedDatabasesWithApprovedSettings(t *testing.T) {
 	}
 	assertSQLiteSettings(t, databases.Core, "wal", 2)
 	assertSQLiteSettings(t, databases.Metrics, "wal", 1)
-	for name, database := range map[string]*sql.DB{"core": databases.Core, "metrics": databases.Metrics} {
+	for name, fixture := range map[string]struct {
+		database *sql.DB
+		want     int
+	}{"core": {databases.Core, 0}, "metrics": {databases.Metrics, 1}} {
 		var count int
-		if err := database.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
+		if err := fixture.database.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 			t.Fatalf("%s migration ledger: %v", name, err)
 		}
-		if count != 0 {
-			t.Fatalf("%s has %d unexpected domain migrations", name, count)
+		if count != fixture.want {
+			t.Fatalf("%s has %d migrations, want %d", name, count, fixture.want)
 		}
 	}
 }

@@ -72,7 +72,7 @@ func Open(ctx context.Context, directory string) (*Databases, error) {
 		_ = databases.Close()
 		return nil, fmt.Errorf("initialize core migrations: %w", err)
 	}
-	if err := ApplyMigrations(ctx, databases.Metrics, nil); err != nil {
+	if err := ApplyMigrations(ctx, databases.Metrics, metricMigrations); err != nil {
 		_ = databases.Close()
 		return nil, fmt.Errorf("initialize metrics migrations: %w", err)
 	}
