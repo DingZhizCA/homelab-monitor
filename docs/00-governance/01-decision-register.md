@@ -28,6 +28,7 @@
 | ADR-016 | 可视化 | 多仪表盘、Widget、用户个性化布局；Owner 发布共享版本 | 已确认 |
 | ADR-017 | 告警 | 基础高可信模板默认启用；受限 AND/OR，模板语义变更 Owner 审核 | 已确认 |
 | ADR-018 | 通知 | Web 站内通知 + PWA Web Push；Critical/Warning 默认推送 | 已确认 |
+| ADR-019 | Server 持久化 | `mattn/go-sqlite3`；Alienware 本地 SSD 上使用 `core.db` 与 `metrics.db` 两个 WAL 文件；`core.db` 使用 `synchronous=FULL`，`metrics.db` 使用 `synchronous=NORMAL` | 2026-10-22 已确认 |
 
 ## 根据「全部按推荐」授权纳入基线、尚未逐项单独确认
 | ID | 领域 | 推荐基线 | 状态 |
@@ -35,7 +36,7 @@
 | REC-001 | Agent ↔ Server | HTTPS，Agent 主动轮询期望状态、批量上报指标、按需下载插件 | 本轮按推荐采用 |
 | REC-002 | 状态管理 | desired / observed / applied revision 声明式对账、拒绝与回滚 | 本轮按推荐采用 |
 | REC-003 | Agent 认证 | TLS + 独立设备凭据（初始采用作用域受限设备 Token，预留 mTLS） | 推荐基线，实施前安全复核 |
-| REC-004 | 持久化 | 优先评估 SQLite WAL；元数据与高频数据逻辑隔离，容量驱动升级 | 推荐基线，需压测确认 |
+| REC-004 | 持久化 | SQLite WAL；元数据与高频数据使用独立数据库文件，容量驱动升级 | 驱动、文件拆分及同步模式已转为 ADR-019；容量仍需压测确认 |
 | REC-005 | Web API | 受控 HTTP JSON API；实时订阅优先 SSE，命令操作仍经 HTTP API | 推荐基线，实施前验证 |
 | REC-006 | 插件发布 | 可信签名制品、哈希校验、平台兼容检查、本地运行权限约束 | 推荐基线 |
 | REC-007 | 插件制品传输 | Agent 使用设备凭据通过 HTTPS 拉取；Manifest、签名和二进制作为 multipart/form-data 独立部分传输，摘要必须与 Desired State 匹配 | 本地组件和测试已采用；`cmd` 装配与目标设备验收未完成 |

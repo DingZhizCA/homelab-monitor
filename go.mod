@@ -3,6 +3,7 @@ module github.com/DingZhizCA/homelab-monitor
 go 1.25.0
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.52
 	golang.org/x/crypto v0.55.0
 	google.golang.org/grpc v1.76.0
 	google.golang.org/protobuf v1.36.9
