@@ -118,7 +118,7 @@ Agent 插件控制循环默认关闭。启用前必须显式配置插件公钥�
 
 `plugin-pack` 可用可选的 `--repository` 将刚签名且保留在 `--output` 中供审查的 bundle 原子导入 Server 制品仓库；重复导入相同字节幂等，冲突字节拒绝。导入制品不会自动创建或启用 Desired State。
 
-Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设备 Token，并显式设置队列条数、队列字节数、单批条数与请求体字节上限。队列仅驻留内存，失败时保留 pending 批次供后续采样轮次重试，容量满则拒绝新样本；它不会提高采样频率。Server 按上一段要求显式配置后会挂载持久化批量路由。Server 按采样时间分批删除超过原始窗口的快照，再按接收时间删除已经没有快照且超过更长窗口的批次凭据。每个 SQLite 连接应用显式的 `core.db` 与 `metrics.db` 页数硬上限；新指标写入前检查逻辑占用和文件系统保留空间。达到硬阈值时先执行一次有界清理和 PASSIVE checkpoint，仍不安全则返回 HTTP 507，Agent 保留 pending 批次。分层聚合和物理空间回收仍未实施。
+Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设备 Token，并显式设置绝对私有的 `state_directory`、队列条数、队列字节数、单批条数与请求体字节上限。队列在每次 Append、首次生成 pending ID 和 Acknowledge 时原子替换带校验和的有界状态文件；重启后恢复未确认快照和同一 pending ID，损坏、身份不符、目录已被另一进程锁定或权限过宽时拒绝启动。失败时保留 pending 批次供后续采样轮次重试，容量满或落盘失败则拒绝新样本；它不会提高采样频率或创建重试线程。Server 按上一段要求显式配置后会挂载持久化批量路由。Server 按采样时间分批删除超过原始窗口的快照，再按接收时间删除已经没有快照且超过更长窗口的批次凭据。每个 SQLite 连接应用显式的 `core.db` 与 `metrics.db` 页数硬上限；新指标写入前检查逻辑占用和文件系统保留空间。达到硬阈值时先执行一次有界清理和 PASSIVE checkpoint，仍不安全则返回 HTTP 507，Agent 保留 pending 批次。分层聚合和物理空间回收仍未实施。
 
 ## API
 
@@ -170,7 +170,7 @@ curl --request POST \
 
 ## systemd 部署
 
-示例单元位于 [deployments/systemd](deployments/systemd)。安装二进制、配置文件并创建非特权用户后，可启用服务：
+示例单元位于 [deployments/systemd](deployments/systemd)。Agent 单元通过 `StateDirectory=homelab-monitor-agent` 提供私有可写目录；启用持久化批队列时，配置应使用其下的 `/var/lib/homelab-monitor-agent/metrics-queue`。安装二进制、配置文件并创建非特权用户后，可启用服务：
 
 ```bash
 sudo systemctl daemon-reload

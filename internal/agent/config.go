@@ -50,11 +50,12 @@ type Config struct {
 		ActiveInterval Duration `yaml:"active_interval"`
 	} `yaml:"monitoring"`
 	MetricsBatch struct {
-		Enabled            bool  `yaml:"enabled"`
-		MaxQueuedSnapshots int   `yaml:"max_queued_snapshots"`
-		MaxQueuedBytes     int64 `yaml:"max_queued_bytes"`
-		MaxBatchSnapshots  int   `yaml:"max_batch_snapshots"`
-		MaxBodyBytes       int64 `yaml:"max_body_bytes"`
+		Enabled            bool   `yaml:"enabled"`
+		StateDirectory     string `yaml:"state_directory"`
+		MaxQueuedSnapshots int    `yaml:"max_queued_snapshots"`
+		MaxQueuedBytes     int64  `yaml:"max_queued_bytes"`
+		MaxBatchSnapshots  int    `yaml:"max_batch_snapshots"`
+		MaxBodyBytes       int64  `yaml:"max_body_bytes"`
 	} `yaml:"metrics_batch"`
 	Collectors struct {
 		CPU     *bool `yaml:"cpu"`
@@ -149,8 +150,11 @@ func (c Config) Validate() error {
 		if parsed.Scheme != "https" || strings.TrimSpace(c.Server.Token) == "" {
 			return fmt.Errorf("metrics_batch.enabled requires HTTPS and a device token")
 		}
+		if !filepath.IsAbs(c.MetricsBatch.StateDirectory) {
+			return fmt.Errorf("metrics_batch.state_directory must be an absolute path")
+		}
 		if c.MetricsBatch.MaxQueuedSnapshots < 1 || c.MetricsBatch.MaxQueuedBytes < 1 || c.MetricsBatch.MaxBatchSnapshots < 1 || c.MetricsBatch.MaxBodyBytes < 1 {
-			return fmt.Errorf("metrics_batch requires explicit positive queue count, queue byte, batch count, and body limits")
+			return fmt.Errorf("metrics_batch requires an absolute state directory and explicit positive queue count, queue byte, batch count, and body limits")
 		}
 		if c.MetricsBatch.MaxBatchSnapshots > c.MetricsBatch.MaxQueuedSnapshots {
 			return fmt.Errorf("metrics_batch.max_batch_snapshots cannot exceed max_queued_snapshots")

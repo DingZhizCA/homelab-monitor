@@ -46,7 +46,7 @@ func TestExampleAgentConfigLoadsWithPluginControlDisabled(t *testing.T) {
 
 func TestLoadConfigRequiresExplicitSecureMetricsBatchSettings(t *testing.T) {
 	directory := testutil.TempDir(t)
-	base := "server:\n  url: https://server.example\n  token: device-token\nagent:\n  device_id: n1\n  display_name: N1\nmetrics_batch:\n  enabled: true\n  max_queued_snapshots: 8\n  max_queued_bytes: 65536\n  max_batch_snapshots: 4\n  max_body_bytes: 32768\n"
+	base := "server:\n  url: https://server.example\n  token: device-token\nagent:\n  device_id: n1\n  display_name: N1\nmetrics_batch:\n  enabled: true\n  state_directory: " + filepath.Join(directory, "metrics-queue") + "\n  max_queued_snapshots: 8\n  max_queued_bytes: 65536\n  max_batch_snapshots: 4\n  max_body_bytes: 32768\n"
 	path := filepath.Join(directory, "agent.yaml")
 	if err := os.WriteFile(path, []byte(base), 0o600); err != nil {
 		t.Fatal(err)
@@ -57,6 +57,8 @@ func TestLoadConfigRequiresExplicitSecureMetricsBatchSettings(t *testing.T) {
 	for _, invalid := range []string{
 		strings.Replace(base, "https://server.example", "http://server.example", 1),
 		strings.Replace(base, "  token: device-token\n", "", 1),
+		strings.Replace(base, "  state_directory: "+filepath.Join(directory, "metrics-queue")+"\n", "", 1),
+		strings.Replace(base, "  state_directory: "+filepath.Join(directory, "metrics-queue")+"\n", "  state_directory: relative\n", 1),
 		strings.Replace(base, "  max_queued_snapshots: 8\n", "", 1),
 		strings.Replace(base, "  max_queued_bytes: 65536\n", "", 1),
 		strings.Replace(base, "  max_batch_snapshots: 4\n", "", 1),

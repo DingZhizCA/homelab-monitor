@@ -1,8 +1,9 @@
 /*
-Package agent provides an explicitly bounded in-memory queue for metric batches.
+Package agent provides an explicitly bounded queue for metric batches.
 
 The queue never schedules sampling or network requests. Callers choose when to
 append, request a pending batch, retry it, and acknowledge a successful upload.
+An optional atomic state store preserves the same semantics across restarts.
 */
 package agent
 
@@ -32,20 +33,34 @@ type BatchQueue struct {
 	snapshotBytes      []int64
 	queuedBytes        int64
 	pending            *metrics.Batch
+	store              batchQueueStateStore
+}
+
+type batchQueueStateStore interface {
+	Save(batchQueueDiskState) (bool, error)
+	Close() error
 }
 
 // NewBatchQueue requires explicit count and byte memory bounds for one device.
 func NewBatchQueue(deviceID string, maxQueuedSnapshots int, maxQueuedBytes int64, maxBatchSnapshots int, maxBatchBodyBytes int64) (*BatchQueue, error) {
+	return newBatchQueue(deviceID, maxQueuedSnapshots, maxQueuedBytes, maxBatchSnapshots, maxBatchBodyBytes, nil, batchQueueDiskState{})
+}
+
+func newBatchQueue(deviceID string, maxQueuedSnapshots int, maxQueuedBytes int64, maxBatchSnapshots int, maxBatchBodyBytes int64, store batchQueueStateStore, restored batchQueueDiskState) (*BatchQueue, error) {
 	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID || maxQueuedSnapshots < 1 || maxQueuedBytes < 1 || maxBatchSnapshots < 1 || maxBatchBodyBytes < 1 {
 		return nil, errors.New("device ID and positive queue count, queue byte, batch count, and batch body limits are required")
 	}
 	if maxBatchSnapshots > maxQueuedSnapshots {
 		return nil, errors.New("batch snapshot limit cannot exceed queue capacity")
 	}
-	return &BatchQueue{
+	queue := &BatchQueue{
 		deviceID: deviceID, maxQueuedSnapshots: maxQueuedSnapshots, maxQueuedBytes: maxQueuedBytes,
-		maxBatchSnapshots: maxBatchSnapshots, maxBatchBodyBytes: maxBatchBodyBytes,
-	}, nil
+		maxBatchSnapshots: maxBatchSnapshots, maxBatchBodyBytes: maxBatchBodyBytes, store: store,
+	}
+	if err := queue.restore(restored); err != nil {
+		return nil, err
+	}
+	return queue, nil
 }
 
 // Append adds one valid, ordered snapshot without exceeding the configured queue capacity.
@@ -73,9 +88,16 @@ func (q *BatchQueue) Append(snapshot metrics.MetricEnvelope) error {
 	if count := len(q.snapshots); count > 0 && !copyOfSnapshot.Timestamp.After(q.snapshots[count-1].Timestamp) {
 		return errors.New("queued snapshots must have strictly increasing timestamps")
 	}
+	published, persistErr := q.saveState(append(q.snapshots, copyOfSnapshot), q.pending)
+	if persistErr != nil && !published {
+		return fmt.Errorf("persist queued snapshot: %w", persistErr)
+	}
 	q.snapshots = append(q.snapshots, copyOfSnapshot)
 	q.snapshotBytes = append(q.snapshotBytes, snapshotBytes)
 	q.queuedBytes += snapshotBytes
+	if persistErr != nil {
+		return fmt.Errorf("persist queued snapshot: %w", persistErr)
+	}
 	return nil
 }
 
@@ -110,7 +132,14 @@ func (q *BatchQueue) PendingBatch() (metrics.Batch, bool, error) {
 			break
 		}
 	}
+	published, persistErr := q.saveState(q.snapshots, &candidate)
+	if persistErr != nil && !published {
+		return metrics.Batch{}, false, fmt.Errorf("persist pending metrics batch: %w", persistErr)
+	}
 	q.pending = &candidate
+	if persistErr != nil {
+		return metrics.Batch{}, false, fmt.Errorf("persist pending metrics batch: %w", persistErr)
+	}
 	batch, err := cloneBatch(candidate)
 	return batch, true, err
 }
@@ -123,12 +152,86 @@ func (q *BatchQueue) Acknowledge(batchID string) error {
 		return errors.New("acknowledgment does not match the pending metrics batch")
 	}
 	acknowledgedCount := len(q.pending.Snapshots)
+	published, persistErr := q.saveState(q.snapshots[acknowledgedCount:], nil)
+	if persistErr != nil && !published {
+		return fmt.Errorf("persist metrics batch acknowledgment: %w", persistErr)
+	}
 	for _, snapshotBytes := range q.snapshotBytes[:acknowledgedCount] {
 		q.queuedBytes -= snapshotBytes
 	}
 	q.snapshots = q.snapshots[acknowledgedCount:]
 	q.snapshotBytes = q.snapshotBytes[acknowledgedCount:]
 	q.pending = nil
+	if persistErr != nil {
+		return fmt.Errorf("persist metrics batch acknowledgment: %w", persistErr)
+	}
+	return nil
+}
+
+// Close releases the optional persistent state directory handle.
+func (q *BatchQueue) Close() error {
+	q.sendMu.Lock()
+	defer q.sendMu.Unlock()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.store == nil {
+		return nil
+	}
+	err := q.store.Close()
+	q.store = nil
+	return err
+}
+
+func (q *BatchQueue) saveState(snapshots []metrics.MetricEnvelope, pending *metrics.Batch) (bool, error) {
+	if q.store == nil {
+		return true, nil
+	}
+	state := batchQueueDiskState{Version: batchQueueStateVersion, DeviceIDHash: batchQueueDeviceHash(q.deviceID), Snapshots: snapshots}
+	if pending != nil {
+		state.PendingBatchID = pending.ID
+		state.PendingSnapshots = len(pending.Snapshots)
+	}
+	return q.store.Save(state)
+}
+
+func (q *BatchQueue) restore(state batchQueueDiskState) error {
+	if state.Version == 0 {
+		return nil
+	}
+	if state.Version != batchQueueStateVersion || state.DeviceIDHash != batchQueueDeviceHash(q.deviceID) || len(state.Snapshots) > q.maxQueuedSnapshots {
+		return errors.New("persisted metrics queue identity, version, or count is invalid")
+	}
+	for index, snapshot := range state.Snapshots {
+		if err := snapshot.Validate(); err != nil || snapshot.Device.ID != q.deviceID || (index > 0 && !snapshot.Timestamp.After(state.Snapshots[index-1].Timestamp)) {
+			return fmt.Errorf("persisted metrics queue snapshot %d is invalid", index)
+		}
+		encoded, err := json.Marshal(snapshot)
+		if err != nil {
+			return fmt.Errorf("measure persisted metrics queue snapshot %d: %w", index, err)
+		}
+		bytes := int64(len(encoded))
+		if bytes > q.maxQueuedBytes-q.queuedBytes {
+			return ErrBatchQueueFull
+		}
+		q.snapshots = append(q.snapshots, snapshot)
+		q.snapshotBytes = append(q.snapshotBytes, bytes)
+		q.queuedBytes += bytes
+	}
+	if state.PendingBatchID == "" && state.PendingSnapshots == 0 {
+		return nil
+	}
+	if state.PendingBatchID == "" || state.PendingSnapshots < 1 || state.PendingSnapshots > len(q.snapshots) || state.PendingSnapshots > q.maxBatchSnapshots {
+		return errors.New("persisted pending metrics batch is invalid")
+	}
+	pending := metrics.Batch{ID: state.PendingBatchID, DeviceID: q.deviceID, Snapshots: append([]metrics.MetricEnvelope(nil), q.snapshots[:state.PendingSnapshots]...)}
+	if err := pending.Validate(q.maxBatchSnapshots); err != nil {
+		return fmt.Errorf("validate persisted pending metrics batch: %w", err)
+	}
+	body, err := json.Marshal(pending)
+	if err != nil || int64(len(body)) > q.maxBatchBodyBytes {
+		return errors.New("persisted pending metrics batch exceeds its body limit")
+	}
+	q.pending = &pending
 	return nil
 }
 

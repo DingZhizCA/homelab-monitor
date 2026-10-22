@@ -34,7 +34,7 @@ type metricsReporter interface {
 }
 
 // batchReporter retains unacknowledged snapshots in the explicitly bounded
-// memory queue. A successful response only removes the exact pending batch.
+// durable queue. A successful response only removes the exact pending batch.
 type batchReporter struct {
 	queue  *agentpkg.BatchQueue
 	sender *agentpkg.Sender
@@ -72,7 +72,8 @@ func main() {
 	sender := agentpkg.NewSender(config.Server.URL, config.Server.Token)
 	var reporter metricsReporter = sender
 	if config.MetricsBatch.Enabled {
-		queue, err := agentpkg.NewBatchQueue(
+		queue, err := agentpkg.OpenBatchQueue(
+			config.MetricsBatch.StateDirectory,
 			config.Agent.DeviceID,
 			config.MetricsBatch.MaxQueuedSnapshots,
 			config.MetricsBatch.MaxQueuedBytes,
@@ -82,6 +83,11 @@ func main() {
 		if err != nil {
 			log.Fatalf("component=agent level=ERROR msg=%q", err)
 		}
+		defer func() {
+			if err := queue.Close(); err != nil {
+				log.Printf("component=agent level=ERROR msg=%q", err)
+			}
+		}()
 		reporter = &batchReporter{queue: queue, sender: sender}
 	}
 	device := metrics.DeviceInfo{ID: config.Agent.DeviceID, DisplayName: config.Agent.DisplayName}

@@ -15,7 +15,8 @@ monitoring:
 metrics_batch:
   # Keep disabled until the Server has an HTTPS, device-authenticated atomic batch writer.
   enabled: false
-  # Enabling requires every bound below; the queue is memory-only and is lost on restart.
+  # Enabling requires a private local state directory and every bound below.
+  # state_directory: "/var/lib/homelab-monitor-agent/metrics-queue"
   # max_queued_snapshots: <positive count>
   # max_queued_bytes: <positive byte limit>
   # max_batch_snapshots: <positive count not greater than queue capacity>
