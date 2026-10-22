@@ -24,6 +24,7 @@ func TestNewPluginRuntimeRequiresAndAssemblesExplicitTrustInputs(t *testing.T) {
 	}
 	stagingDirectory := filepath.Join(root, "staging")
 	runtimeDirectory := filepath.Join(root, "runtime")
+	stateDirectory := filepath.Join(root, "state")
 	for _, directory := range []string{stagingDirectory, runtimeDirectory} {
 		if err := os.Mkdir(directory, 0o700); err != nil {
 			t.Fatal(err)
@@ -44,8 +45,9 @@ func TestNewPluginRuntimeRequiresAndAssemblesExplicitTrustInputs(t *testing.T) {
 	config := PluginRuntimeConfig{
 		ServerURL: "https://server.example", DeviceID: "node-a", DeviceToken: "device-token",
 		PublisherKeyPath: keyPath, PermissionFile: permissionPath,
-		StagingDirectory: stagingDirectory, RuntimeDirectory: runtimeDirectory,
+		StagingDirectory: stagingDirectory, RuntimeDirectory: runtimeDirectory, StateDirectory: stateDirectory,
 		HostProtocolMajor: 1, MaxArtifactBytes: 1 << 20, OperationTimeout: 30 * time.Second,
+		MaxStateEntries: 16, MaxStateBytes: 1 << 20,
 		MaxConsecutiveFailures: 5, InitialFailureBackoff: time.Second, MaxFailureBackoff: 5 * time.Minute,
 	}
 	runtime, err := NewPluginRuntime(config)
@@ -113,6 +115,7 @@ func TestPluginRuntimeCloseCancelsInFlightReconciliation(t *testing.T) {
 	}
 	stagingDirectory := filepath.Join(root, "staging")
 	runtimeDirectory := filepath.Join(root, "runtime")
+	stateDirectory := filepath.Join(root, "state")
 	for _, directory := range []string{stagingDirectory, runtimeDirectory} {
 		if err := os.Mkdir(directory, 0o700); err != nil {
 			t.Fatal(err)
@@ -133,8 +136,9 @@ func TestPluginRuntimeCloseCancelsInFlightReconciliation(t *testing.T) {
 	pluginRuntime, err := NewPluginRuntime(PluginRuntimeConfig{
 		ServerURL: server.URL, DeviceID: "node-a", DeviceToken: "device-token",
 		PublisherKeyPath: keyPath, PermissionFile: permissionPath,
-		StagingDirectory: stagingDirectory, RuntimeDirectory: runtimeDirectory,
+		StagingDirectory: stagingDirectory, RuntimeDirectory: runtimeDirectory, StateDirectory: stateDirectory,
 		HostProtocolMajor: 1, MaxArtifactBytes: 1 << 20, OperationTimeout: 30 * time.Second,
+		MaxStateEntries: 16, MaxStateBytes: 1 << 20,
 		MaxConsecutiveFailures: 3, InitialFailureBackoff: time.Second, MaxFailureBackoff: time.Minute,
 	})
 	if err != nil {

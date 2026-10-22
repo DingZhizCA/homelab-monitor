@@ -71,6 +71,21 @@ type reconcilerManager struct {
 	calls     []string
 }
 
+type reconcilerMemoryStore struct {
+	checkpoint ReconcilerCheckpoint
+	saves      int
+}
+
+func (s *reconcilerMemoryStore) Load() (ReconcilerCheckpoint, error) {
+	return s.checkpoint, nil
+}
+
+func (s *reconcilerMemoryStore) Save(checkpoint ReconcilerCheckpoint) (bool, error) {
+	s.checkpoint = checkpoint
+	s.saves++
+	return true, nil
+}
+
 func (m *reconcilerManager) PreparePlugin(_ context.Context, path string) (ManagedPlugin, error) {
 	m.calls = append(m.calls, path)
 	if m.failPath[path] {
@@ -90,7 +105,7 @@ func TestReconcilerAppliesRetriesRollsBackAndDisables(t *testing.T) {
 	}}
 	downloader := &reconcilerDownloader{bundles: map[string]PackageArtifact{"1.0.0": packageV1Bundle(t, packageV1), "2.0.0": packageV2Bundle(t, packageV2)}}
 	manager := &reconcilerManager{failPath: make(map[string]bool)}
-	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, testRetryPolicy())
+	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, 16, testRetryPolicy(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +153,7 @@ func TestReconcilerRejectsStaleDuplicateAndCrossDeviceBatches(t *testing.T) {
 	packageV1 := reconcilerTestPackage(t, "1.0.0", []byte("plugin-v1"))
 	stager := &reconcilerStager{packages: map[string]StagedPackage{packageV1.RelativePath: packageV1}}
 	downloader := &reconcilerDownloader{bundles: map[string]PackageArtifact{"1.0.0": packageV1Bundle(t, packageV1)}}
-	reconciler, err := NewReconciler("node-a", stager, &reconcilerManager{failPath: make(map[string]bool)}, downloader, 1024, testRetryPolicy())
+	reconciler, err := NewReconciler("node-a", stager, &reconcilerManager{failPath: make(map[string]bool)}, downloader, 1024, 16, testRetryPolicy(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +183,7 @@ func TestNewReconcilerRequiresTrimmedDeviceIdentity(t *testing.T) {
 	packageV1 := reconcilerTestPackage(t, "1.0.0", []byte("plugin-v1"))
 	stager := &reconcilerStager{packages: map[string]StagedPackage{packageV1.RelativePath: packageV1}}
 	downloader := &reconcilerDownloader{bundles: map[string]PackageArtifact{"1.0.0": packageV1Bundle(t, packageV1)}}
-	if _, err := NewReconciler(" node-a ", stager, &reconcilerManager{failPath: make(map[string]bool)}, downloader, 1024, testRetryPolicy()); err == nil {
+	if _, err := NewReconciler(" node-a ", stager, &reconcilerManager{failPath: make(map[string]bool)}, downloader, 1024, 16, testRetryPolicy(), nil); err == nil {
 		t.Fatal("reconciler accepted a device identity with surrounding whitespace")
 	}
 }
@@ -179,7 +194,7 @@ func TestReconcilerRejectsWrongArtifactBeforeStaging(t *testing.T) {
 	stager := &reconcilerStager{packages: map[string]StagedPackage{packageV1.RelativePath: packageV1}}
 	manager := &reconcilerManager{failPath: make(map[string]bool)}
 	downloader := &reconcilerDownloader{bundles: map[string]PackageArtifact{"1.0.0": packageV2Bundle(t, packageV2)}}
-	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, testRetryPolicy())
+	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, 16, testRetryPolicy(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +214,7 @@ func TestReconcilerRestartsActivePluginAfterHealthFailure(t *testing.T) {
 	stager := &reconcilerStager{packages: map[string]StagedPackage{packageV1.RelativePath: packageV1}}
 	downloader := &reconcilerDownloader{bundles: map[string]PackageArtifact{"1.0.0": packageV1Bundle(t, packageV1)}}
 	manager := &reconcilerManager{failPath: make(map[string]bool)}
-	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, testRetryPolicy())
+	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, 16, testRetryPolicy(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +241,7 @@ func TestReconcilerQuarantinesRepeatedHealthFailuresAfterBoundedRestarts(t *test
 	manager := &reconcilerManager{failPath: make(map[string]bool)}
 	now := time.Date(2026, 10, 18, 3, 0, 0, 0, time.UTC)
 	policy := RetryPolicy{MaxConsecutiveFailures: 2, InitialBackoff: time.Second, MaxBackoff: 2 * time.Second, Now: func() time.Time { return now }}
-	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, policy)
+	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, 16, policy, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +282,7 @@ func TestReconcilerRollsBackToPreviousVersionAfterHealthFailure(t *testing.T) {
 	}}
 	manager := &reconcilerManager{failPath: make(map[string]bool)}
 	policy := RetryPolicy{MaxConsecutiveFailures: 3, InitialBackoff: time.Hour, MaxBackoff: time.Hour, Now: time.Now}
-	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, policy)
+	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, 16, policy, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +313,7 @@ func TestReconcilerBacksOffAndQuarantinesRepeatedStartupFailures(t *testing.T) {
 	manager := &reconcilerManager{failPath: map[string]bool{packageV1.RelativePath: true}}
 	now := time.Date(2026, 10, 18, 2, 0, 0, 0, time.UTC)
 	policy := RetryPolicy{MaxConsecutiveFailures: 2, InitialBackoff: time.Second, MaxBackoff: 4 * time.Second, Now: func() time.Time { return now }}
-	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, policy)
+	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, 16, policy, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,6 +340,132 @@ func TestReconcilerBacksOffAndQuarantinesRepeatedStartupFailures(t *testing.T) {
 	reports, err = reconciler.Apply(ctx, []DesiredState{desired})
 	if err != nil || reports[0].Lifecycle != StateRunning || reports[0].AppliedRev != desired.Revision {
 		t.Fatalf("new desired revision did not clear quarantine: reports=%+v err=%v", reports, err)
+	}
+}
+
+func TestReconcilerPersistsQuarantineAcrossRestartUntilNewRevision(t *testing.T) {
+	packageV1 := reconcilerTestPackage(t, "1.0.0", []byte("plugin-v1"))
+	stager := &reconcilerStager{packages: map[string]StagedPackage{packageV1.RelativePath: packageV1}}
+	downloader := &reconcilerDownloader{bundles: map[string]PackageArtifact{"1.0.0": packageV1Bundle(t, packageV1)}}
+	store := &reconcilerMemoryStore{}
+	now := time.Date(2026, 10, 18, 4, 0, 0, 0, time.UTC)
+	policy := RetryPolicy{MaxConsecutiveFailures: 2, InitialBackoff: time.Second, MaxBackoff: 2 * time.Second, Now: func() time.Time { return now }}
+	manager := &reconcilerManager{failPath: map[string]bool{packageV1.RelativePath: true}}
+	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, 16, policy, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	desired := reconcilerDesired("node-a", packageV1.Manifest, 1, true)
+	if _, err := reconciler.Apply(ctx, []DesiredState{desired}); err == nil {
+		t.Fatal("first startup failure unexpectedly succeeded")
+	}
+	now = now.Add(time.Second)
+	if reports, err := reconciler.Apply(ctx, []DesiredState{desired}); err == nil || reports[0].Lifecycle != StateQuarantined {
+		t.Fatalf("quarantine reports=%+v err=%v", reports, err)
+	}
+
+	restartedManager := &reconcilerManager{failPath: make(map[string]bool)}
+	restarted, err := NewReconciler("node-a", stager, restartedManager, downloader, 1024, 16, policy, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reports, err := restarted.Apply(ctx, []DesiredState{desired}); err != nil || reports[0].Lifecycle != StateQuarantined || len(restartedManager.calls) != 0 {
+		t.Fatalf("persisted quarantine reports=%+v starts=%d err=%v", reports, len(restartedManager.calls), err)
+	}
+	desired.Revision++
+	if reports, err := restarted.Apply(ctx, []DesiredState{desired}); err != nil || reports[0].Lifecycle != StateRunning || len(restartedManager.calls) != 1 {
+		t.Fatalf("new revision reports=%+v starts=%d err=%v", reports, len(restartedManager.calls), err)
+	}
+}
+
+func TestReconcilerRestoresCurrentAndRollbackPackagesAfterRestart(t *testing.T) {
+	packageV1 := reconcilerTestPackage(t, "1.0.0", []byte("plugin-v1"))
+	packageV2 := reconcilerTestPackage(t, "2.0.0", []byte("plugin-v2"))
+	stager := &reconcilerStager{packages: map[string]StagedPackage{packageV1.RelativePath: packageV1, packageV2.RelativePath: packageV2}}
+	downloader := &reconcilerDownloader{bundles: map[string]PackageArtifact{"1.0.0": packageV1Bundle(t, packageV1), "2.0.0": packageV2Bundle(t, packageV2)}}
+	store := &reconcilerMemoryStore{}
+	manager := &reconcilerManager{failPath: make(map[string]bool)}
+	reconciler, err := NewReconciler("node-a", stager, manager, downloader, 1024, 16, testRetryPolicy(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	v1 := reconcilerDesired("node-a", packageV1.Manifest, 1, true)
+	v2 := reconcilerDesired("node-a", packageV2.Manifest, 2, true)
+	if _, err := reconciler.Apply(ctx, []DesiredState{v1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Apply(ctx, []DesiredState{v2}); err != nil {
+		t.Fatal(err)
+	}
+
+	restartedManager := &reconcilerManager{failPath: make(map[string]bool)}
+	restarted, err := NewReconciler("node-a", stager, restartedManager, downloader, 1024, 16, testRetryPolicy(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloadsBefore := downloader.calls
+	if reports, err := restarted.Apply(ctx, []DesiredState{v2}); err != nil || reports[0].AppliedRev != 2 || downloader.calls != downloadsBefore || restartedManager.calls[0] != packageV2.RelativePath {
+		t.Fatalf("restored current reports=%+v downloads=%d starts=%v err=%v", reports, downloader.calls-downloadsBefore, restartedManager.calls, err)
+	}
+	restartedManager.processes[0].healthErr = errors.New("restored v2 exited")
+	if reports, err := restarted.Apply(ctx, []DesiredState{v2}); err == nil || reports[0].AppliedRev != 1 || restartedManager.calls[1] != packageV1.RelativePath {
+		t.Fatalf("restored rollback reports=%+v starts=%v err=%v", reports, restartedManager.calls, err)
+	}
+}
+
+func TestReconcilerRetainsPersistedRollbackStateAfterRestoreFailure(t *testing.T) {
+	packageV1 := reconcilerTestPackage(t, "1.0.0", []byte("plugin-v1"))
+	packageV2 := reconcilerTestPackage(t, "2.0.0", []byte("plugin-v2"))
+	stager := &reconcilerStager{packages: map[string]StagedPackage{packageV1.RelativePath: packageV1, packageV2.RelativePath: packageV2}}
+	downloader := &reconcilerDownloader{bundles: map[string]PackageArtifact{"1.0.0": packageV1Bundle(t, packageV1), "2.0.0": packageV2Bundle(t, packageV2)}}
+	store := &reconcilerMemoryStore{}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	reconciler, err := NewReconciler("node-a", stager, &reconcilerManager{failPath: make(map[string]bool)}, downloader, 1024, 16, testRetryPolicy(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1 := reconcilerDesired("node-a", packageV1.Manifest, 1, true)
+	v2 := reconcilerDesired("node-a", packageV2.Manifest, 2, true)
+	if _, err := reconciler.Apply(ctx, []DesiredState{v1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Apply(ctx, []DesiredState{v2}); err != nil {
+		t.Fatal(err)
+	}
+
+	failingManager := &reconcilerManager{failPath: map[string]bool{packageV2.RelativePath: true}}
+	restarted, err := NewReconciler("node-a", stager, failingManager, downloader, 1024, 16, testRetryPolicy(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Apply(ctx, []DesiredState{v2}); err == nil {
+		t.Fatal("restored package startup failure unexpectedly succeeded")
+	}
+	if len(store.checkpoint.Plugins) != 1 || store.checkpoint.Plugins[0].Current == nil || store.checkpoint.Plugins[0].Previous == nil {
+		t.Fatalf("restore failure discarded rollback state: %+v", store.checkpoint)
+	}
+}
+
+func TestReconcilerRejectsStateBeyondEntryLimit(t *testing.T) {
+	packageV1 := reconcilerTestPackage(t, "1.0.0", []byte("plugin-v1"))
+	stager := &reconcilerStager{packages: map[string]StagedPackage{packageV1.RelativePath: packageV1}}
+	downloader := &reconcilerDownloader{bundles: map[string]PackageArtifact{"1.0.0": packageV1Bundle(t, packageV1)}}
+	reconciler, err := NewReconciler("node-a", stager, &reconcilerManager{failPath: make(map[string]bool)}, downloader, 1024, 1, testRetryPolicy(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	first := reconcilerDesired("node-a", packageV1.Manifest, 1, false)
+	second := first
+	second.PluginID = "second"
+	if _, err := reconciler.Apply(ctx, []DesiredState{first, second}); err == nil {
+		t.Fatal("plugin state beyond entry limit was accepted")
 	}
 }
 

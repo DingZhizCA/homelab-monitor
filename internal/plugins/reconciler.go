@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -77,6 +78,41 @@ type pluginFailure struct {
 	lastError   string
 }
 
+// ReconcilerStateStore persists bounded local rollback and retry state.
+type ReconcilerStateStore interface {
+	Load() (ReconcilerCheckpoint, error)
+	Save(ReconcilerCheckpoint) (bool, error)
+}
+
+// ReconcilerCheckpoint is the process-free state needed after an Agent restart.
+type ReconcilerCheckpoint struct {
+	Plugins []PluginCheckpoint `json:"plugins"`
+}
+
+// PluginCheckpoint binds observed intent, applied packages, and retry state.
+type PluginCheckpoint struct {
+	PluginID string                   `json:"plugin_id"`
+	Observed *DesiredState            `json:"observed,omitempty"`
+	Current  *PluginVersionCheckpoint `json:"current,omitempty"`
+	Previous *PluginVersionCheckpoint `json:"previous,omitempty"`
+	Failure  *PluginFailureCheckpoint `json:"failure,omitempty"`
+}
+
+// PluginVersionCheckpoint identifies a previously verified staged package.
+type PluginVersionCheckpoint struct {
+	Package         StagedPackage `json:"package"`
+	AppliedRevision uint64        `json:"applied_revision"`
+}
+
+// PluginFailureCheckpoint retains explicit backoff and quarantine decisions.
+type PluginFailureCheckpoint struct {
+	Revision    uint64    `json:"revision"`
+	Consecutive uint32    `json:"consecutive"`
+	NextAttempt time.Time `json:"next_attempt,omitempty"`
+	Quarantined bool      `json:"quarantined"`
+	LastError   string    `json:"last_error"`
+}
+
 // Reconciler applies one Agent's desired plugin states under explicit caller control.
 type Reconciler struct {
 	mu              sync.Mutex
@@ -86,24 +122,37 @@ type Reconciler struct {
 	downloader      PluginArtifactDownloader
 	maxArtifactSize int64
 	retryPolicy     RetryPolicy
+	maxStateEntries int
+	stateStore      ReconcilerStateStore
 	active          map[string]activePlugin
+	restored        map[string]PluginCheckpoint
 	observed        map[string]DesiredState
 	failures        map[string]pluginFailure
 }
 
 // NewReconciler requires all package boundaries and an explicit artifact size limit.
-func NewReconciler(deviceID string, stager PluginPackageStager, manager PluginPreparer, downloader PluginArtifactDownloader, maxArtifactSize int64, retryPolicy RetryPolicy) (*Reconciler, error) {
-	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID || stager == nil || manager == nil || downloader == nil || maxArtifactSize < 1 {
-		return nil, errors.New("device ID, package stager, plugin manager, artifact downloader, and positive size limit are required")
+func NewReconciler(deviceID string, stager PluginPackageStager, manager PluginPreparer, downloader PluginArtifactDownloader, maxArtifactSize int64, maxStateEntries int, retryPolicy RetryPolicy, stateStore ReconcilerStateStore) (*Reconciler, error) {
+	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID || stager == nil || manager == nil || downloader == nil || maxArtifactSize < 1 || maxStateEntries < 1 {
+		return nil, errors.New("device ID, package boundaries, and positive artifact and state limits are required")
 	}
 	if err := retryPolicy.validate(); err != nil {
 		return nil, err
 	}
-	return &Reconciler{
+	reconciler := &Reconciler{
 		deviceID: deviceID, stager: stager, manager: manager, downloader: downloader,
-		maxArtifactSize: maxArtifactSize, retryPolicy: retryPolicy,
-		active: make(map[string]activePlugin), observed: make(map[string]DesiredState), failures: make(map[string]pluginFailure),
-	}, nil
+		maxArtifactSize: maxArtifactSize, maxStateEntries: maxStateEntries, retryPolicy: retryPolicy, stateStore: stateStore,
+		active: make(map[string]activePlugin), restored: make(map[string]PluginCheckpoint), observed: make(map[string]DesiredState), failures: make(map[string]pluginFailure),
+	}
+	if stateStore != nil {
+		checkpoint, err := stateStore.Load()
+		if err != nil {
+			return nil, fmt.Errorf("load plugin reconciler state: %w", err)
+		}
+		if err := reconciler.restoreCheckpoint(checkpoint); err != nil {
+			return nil, err
+		}
+	}
+	return reconciler, nil
 }
 
 // Apply reconciles one explicit batch and returns a report for each desired plugin.
@@ -114,6 +163,10 @@ func (r *Reconciler) Apply(ctx context.Context, desired []DesiredState) ([]Repor
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	seen := make(map[string]struct{}, len(desired))
+	known := make(map[string]struct{}, len(r.observed)+len(desired))
+	for pluginID := range r.observed {
+		known[pluginID] = struct{}{}
+	}
 	for _, state := range desired {
 		if state.DeviceID != r.deviceID {
 			return nil, fmt.Errorf("desired plugin state belongs to another device")
@@ -125,6 +178,7 @@ func (r *Reconciler) Apply(ctx context.Context, desired []DesiredState) ([]Repor
 			return nil, fmt.Errorf("desired plugin batch contains duplicate plugin %q", state.PluginID)
 		}
 		seen[state.PluginID] = struct{}{}
+		known[state.PluginID] = struct{}{}
 		if current, exists := r.observed[state.PluginID]; exists {
 			if state.Revision < current.Revision {
 				return nil, fmt.Errorf("desired revision %d is older than observed revision %d for plugin %q", state.Revision, current.Revision, state.PluginID)
@@ -133,6 +187,9 @@ func (r *Reconciler) Apply(ctx context.Context, desired []DesiredState) ([]Repor
 				return nil, fmt.Errorf("desired revision %d conflicts with observed state for plugin %q", state.Revision, state.PluginID)
 			}
 		}
+	}
+	if len(known) > r.maxStateEntries {
+		return nil, errors.New("plugin reconciler state capacity reached")
 	}
 
 	reports := make([]ReportedState, 0, len(desired))
@@ -148,6 +205,12 @@ func (r *Reconciler) Apply(ctx context.Context, desired []DesiredState) ([]Repor
 	slices.SortFunc(reports, func(left, right ReportedState) int {
 		return cmpString(left.PluginID, right.PluginID)
 	})
+	if r.stateStore != nil {
+		_, persistErr := r.stateStore.Save(r.checkpoint())
+		if persistErr != nil {
+			applyErrors = append(applyErrors, fmt.Errorf("persist plugin reconciler state: %w", persistErr))
+		}
+	}
 	return reports, errors.Join(applyErrors...)
 }
 
@@ -171,6 +234,32 @@ func (r *Reconciler) Close(ctx context.Context) error {
 
 func (r *Reconciler) applyOne(ctx context.Context, desired DesiredState) (ReportedState, error) {
 	current, hasCurrent := r.active[desired.PluginID]
+	if !hasCurrent {
+		if restored, ok := r.restored[desired.PluginID]; ok {
+			if !desired.Enabled || restored.Current == nil {
+				delete(r.restored, desired.PluginID)
+			} else {
+				process, err := r.manager.PreparePlugin(ctx, restored.Current.Package.RelativePath)
+				if err != nil || process == nil {
+					if err == nil {
+						err = errors.New("plugin manager returned an empty restored process")
+					}
+					return ReportedState{DeviceID: r.deviceID, PluginID: desired.PluginID, ObservedRev: desired.Revision, Lifecycle: StateFailed, RefusalReason: err.Error()}, fmt.Errorf("restore persisted plugin version: %w", err)
+				}
+				restoredPackage, err := verifiedPreparedPackage(process, restored.Current.Package)
+				if err != nil {
+					return ReportedState{DeviceID: r.deviceID, PluginID: desired.PluginID, ObservedRev: desired.Revision, Lifecycle: StateFailed, RefusalReason: err.Error()}, errors.Join(err, process.Close(ctx))
+				}
+				current = activePlugin{packageData: restoredPackage, process: process, appliedRevision: restored.Current.AppliedRevision}
+				if restored.Previous != nil {
+					current.previous = &activePluginVersion{packageData: restored.Previous.Package, appliedRevision: restored.Previous.AppliedRevision}
+				}
+				delete(r.restored, desired.PluginID)
+				r.active[desired.PluginID] = current
+				hasCurrent = true
+			}
+		}
+	}
 	if !desired.Enabled {
 		if hasCurrent {
 			if err := current.process.Close(ctx); err != nil {
@@ -288,6 +377,18 @@ func (r *Reconciler) applyOne(ctx context.Context, desired DesiredState) (Report
 	return reportedFor(desired, active, StateRunning, ""), nil
 }
 
+func verifiedPreparedPackage(process ManagedPlugin, checkpoint StagedPackage) (StagedPackage, error) {
+	prepared, ok := process.(*PreparedPlugin)
+	if !ok {
+		return checkpoint, nil
+	}
+	verified := prepared.Package
+	if verified.RelativePath != checkpoint.RelativePath || verified.Manifest.PluginID != checkpoint.Manifest.PluginID || verified.Manifest.Version != checkpoint.Manifest.Version || verified.Manifest.Platform != checkpoint.Manifest.Platform || verified.Manifest.ArtifactSHA256 != checkpoint.Manifest.ArtifactSHA256 {
+		return StagedPackage{}, errors.New("restored plugin package differs from persisted identity")
+	}
+	return verified, nil
+}
+
 func (r *Reconciler) applyWithRetry(ctx context.Context, desired DesiredState) (ReportedState, error) {
 	if !desired.Enabled {
 		delete(r.failures, desired.PluginID)
@@ -314,7 +415,9 @@ func (r *Reconciler) applyWithRetry(ctx context.Context, desired DesiredState) (
 	failure.consecutive++
 	failure.lastError = err.Error()
 	failure.quarantined = failure.consecutive >= r.retryPolicy.MaxConsecutiveFailures
-	if !failure.quarantined {
+	if failure.quarantined {
+		failure.nextAttempt = time.Time{}
+	} else {
 		failure.nextAttempt = r.retryPolicy.Now().Add(retryBackoff(r.retryPolicy, failure.consecutive))
 	}
 	r.failures[desired.PluginID] = failure
@@ -382,6 +485,107 @@ func reportedFor(desired DesiredState, active activePlugin, lifecycle LifecycleS
 		DeviceID: desired.DeviceID, PluginID: desired.PluginID, ObservedRev: desired.Revision,
 		AppliedRev: active.appliedRevision, Lifecycle: lifecycle, RefusalReason: reason,
 	}
+}
+
+func (r *Reconciler) checkpoint() ReconcilerCheckpoint {
+	pluginIDs := make(map[string]struct{}, len(r.observed)+len(r.active)+len(r.restored)+len(r.failures))
+	for pluginID := range r.observed {
+		pluginIDs[pluginID] = struct{}{}
+	}
+	for pluginID := range r.active {
+		pluginIDs[pluginID] = struct{}{}
+	}
+	for pluginID := range r.restored {
+		pluginIDs[pluginID] = struct{}{}
+	}
+	for pluginID := range r.failures {
+		pluginIDs[pluginID] = struct{}{}
+	}
+	ids := make([]string, 0, len(pluginIDs))
+	for pluginID := range pluginIDs {
+		ids = append(ids, pluginID)
+	}
+	slices.Sort(ids)
+	checkpoint := ReconcilerCheckpoint{Plugins: make([]PluginCheckpoint, 0, len(ids))}
+	for _, pluginID := range ids {
+		entry := PluginCheckpoint{PluginID: pluginID}
+		if observed, ok := r.observed[pluginID]; ok {
+			copyOfObserved := observed
+			entry.Observed = &copyOfObserved
+		}
+		if active, ok := r.active[pluginID]; ok {
+			entry.Current = versionCheckpoint(active.packageData, active.appliedRevision)
+			if active.previous != nil {
+				entry.Previous = versionCheckpoint(active.previous.packageData, active.previous.appliedRevision)
+			}
+		} else if restored, ok := r.restored[pluginID]; ok {
+			entry.Current, entry.Previous = restored.Current, restored.Previous
+		}
+		if failure, ok := r.failures[pluginID]; ok {
+			entry.Failure = &PluginFailureCheckpoint{Revision: failure.revision, Consecutive: failure.consecutive, NextAttempt: failure.nextAttempt, Quarantined: failure.quarantined, LastError: failure.lastError}
+		}
+		checkpoint.Plugins = append(checkpoint.Plugins, entry)
+	}
+	return checkpoint
+}
+
+func versionCheckpoint(staged StagedPackage, revision uint64) *PluginVersionCheckpoint {
+	return &PluginVersionCheckpoint{Package: staged, AppliedRevision: revision}
+}
+
+func (r *Reconciler) restoreCheckpoint(checkpoint ReconcilerCheckpoint) error {
+	if len(checkpoint.Plugins) > r.maxStateEntries {
+		return errors.New("persisted plugin reconciler state exceeds its entry limit")
+	}
+	for _, entry := range checkpoint.Plugins {
+		if !identifierPattern.MatchString(entry.PluginID) {
+			return errors.New("persisted plugin reconciler state has an invalid plugin ID")
+		}
+		if _, exists := r.restored[entry.PluginID]; exists {
+			return errors.New("persisted plugin reconciler state repeats a plugin")
+		}
+		if entry.Observed != nil {
+			if err := entry.Observed.Validate(); err != nil || entry.Observed.DeviceID != r.deviceID || entry.Observed.PluginID != entry.PluginID {
+				return errors.New("persisted plugin reconciler observed state is invalid")
+			}
+			r.observed[entry.PluginID] = *entry.Observed
+		}
+		if err := validateVersionCheckpoint(entry.PluginID, entry.Current); err != nil {
+			return err
+		}
+		if entry.Current != nil && (entry.Observed == nil || entry.Current.AppliedRevision > entry.Observed.Revision) {
+			return errors.New("persisted plugin current version is not bound to observed state")
+		}
+		if entry.Previous != nil && entry.Current == nil {
+			return errors.New("persisted plugin reconciler previous version has no current version")
+		}
+		if err := validateVersionCheckpoint(entry.PluginID, entry.Previous); err != nil {
+			return err
+		}
+		if entry.Previous != nil && entry.Previous.AppliedRevision >= entry.Current.AppliedRevision {
+			return errors.New("persisted plugin previous version revision is invalid")
+		}
+		if entry.Failure != nil {
+			failure := entry.Failure
+			if entry.Observed == nil || failure.Revision != entry.Observed.Revision || failure.Revision == 0 || failure.Consecutive == 0 || strings.TrimSpace(failure.LastError) == "" || (failure.Quarantined && !failure.NextAttempt.IsZero()) || (!failure.Quarantined && failure.NextAttempt.IsZero()) {
+				return errors.New("persisted plugin reconciliation failure is invalid")
+			}
+			r.failures[entry.PluginID] = pluginFailure{revision: failure.Revision, consecutive: failure.Consecutive, nextAttempt: failure.NextAttempt.UTC(), quarantined: failure.Quarantined, lastError: failure.LastError}
+		}
+		r.restored[entry.PluginID] = entry
+	}
+	return nil
+}
+
+func validateVersionCheckpoint(pluginID string, checkpoint *PluginVersionCheckpoint) error {
+	if checkpoint == nil {
+		return nil
+	}
+	staged := checkpoint.Package
+	if checkpoint.AppliedRevision == 0 || staged.Manifest.PluginID != pluginID || staged.Manifest.Validate() != nil || filepath.IsAbs(staged.RelativePath) || filepath.Clean(staged.RelativePath) != staged.RelativePath || staged.RelativePath == "." || strings.HasPrefix(staged.RelativePath, ".."+string(filepath.Separator)) || !filepath.IsAbs(staged.ArtifactPath) {
+		return errors.New("persisted plugin version checkpoint is invalid")
+	}
+	return nil
 }
 
 func cmpString(left, right string) int {

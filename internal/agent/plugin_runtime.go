@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,9 @@ type PluginRuntimeConfig struct {
 	RuntimeDirectory       string
 	HostProtocolMajor      uint16
 	MaxArtifactBytes       int64
+	StateDirectory         string
+	MaxStateEntries        int
+	MaxStateBytes          int64
 	OperationTimeout       time.Duration
 	MaxConsecutiveFailures uint32
 	InitialFailureBackoff  time.Duration
@@ -43,6 +47,7 @@ type PluginRuntime struct {
 	control         *PluginControlClient
 	reconciler      *plugins.Reconciler
 	stager          *plugins.Stager
+	stateStore      *pluginReconcilerFileStore
 	closing         bool
 	closed          bool
 	reconcileCancel context.CancelFunc
@@ -51,8 +56,8 @@ type PluginRuntime struct {
 
 // NewPluginRuntime assembles plugin control only from explicit trust and resource settings.
 func NewPluginRuntime(config PluginRuntimeConfig) (*PluginRuntime, error) {
-	if strings.TrimSpace(config.DeviceID) == "" || strings.TrimSpace(config.DeviceID) != config.DeviceID || config.HostProtocolMajor == 0 || config.MaxArtifactBytes < 1 || config.OperationTimeout <= 0 {
-		return nil, errors.New("plugin device ID, host protocol major, positive artifact size limit, and operation timeout are required")
+	if strings.TrimSpace(config.DeviceID) == "" || strings.TrimSpace(config.DeviceID) != config.DeviceID || config.HostProtocolMajor == 0 || config.MaxArtifactBytes < 1 || config.OperationTimeout <= 0 || !filepath.IsAbs(config.StateDirectory) || config.MaxStateEntries < 1 || config.MaxStateBytes < 1 {
+		return nil, errors.New("plugin identity, protocol, artifact, operation, and local state limits are required")
 	}
 	if config.MaxConsecutiveFailures == 0 || config.InitialFailureBackoff <= 0 || config.MaxFailureBackoff < config.InitialFailureBackoff {
 		return nil, errors.New("plugin retry failure limit and ordered backoffs are required")
@@ -83,17 +88,23 @@ func NewPluginRuntime(config PluginRuntimeConfig) (*PluginRuntime, error) {
 		_ = stager.Close()
 		return nil, fmt.Errorf("configure plugin manager: %w", err)
 	}
-	reconciler, err := plugins.NewReconciler(config.DeviceID, stager, manager, control, config.MaxArtifactBytes, plugins.RetryPolicy{
+	stateStore, err := openPluginReconcilerStore(config.StateDirectory, config.DeviceID, config.MaxStateBytes)
+	if err != nil {
+		_ = stager.Close()
+		return nil, fmt.Errorf("open plugin reconciler state: %w", err)
+	}
+	reconciler, err := plugins.NewReconciler(config.DeviceID, stager, manager, control, config.MaxArtifactBytes, config.MaxStateEntries, plugins.RetryPolicy{
 		MaxConsecutiveFailures: config.MaxConsecutiveFailures,
 		InitialBackoff:         config.InitialFailureBackoff,
 		MaxBackoff:             config.MaxFailureBackoff,
 		Now:                    time.Now,
-	})
+	}, stateStore)
 	if err != nil {
+		_ = stateStore.Close()
 		_ = stager.Close()
 		return nil, fmt.Errorf("configure plugin reconciler: %w", err)
 	}
-	return &PluginRuntime{deviceID: config.DeviceID, control: control, reconciler: reconciler, stager: stager}, nil
+	return &PluginRuntime{deviceID: config.DeviceID, control: control, reconciler: reconciler, stager: stager, stateStore: stateStore}, nil
 }
 
 // ReconcileOnce polls and applies one control batch, without scheduling metrics.
@@ -158,14 +169,17 @@ func (r *PluginRuntime) Close(ctx context.Context) error {
 	if err := r.reconciler.Close(ctx); err != nil {
 		return err
 	}
-	if err := r.stager.Close(); err != nil {
-		return err
+	var stateErr error
+	if r.stateStore != nil {
+		stateErr = r.stateStore.Close()
+		r.stateStore = nil
 	}
+	stagerErr := r.stager.Close()
 	r.mu.Lock()
 	r.closed = true
 	r.closing = false
 	r.mu.Unlock()
-	return nil
+	return errors.Join(stateErr, stagerErr)
 }
 
 func requireRuntimeDeadline(ctx context.Context) error {

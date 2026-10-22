@@ -42,8 +42,11 @@ plugins:
   # permission_file: "/etc/homelab-monitor/plugin-grants.json"
   # staging_directory: "/var/lib/homelab-monitor/plugins/staging"
   # runtime_directory: "/run/homelab-monitor/plugins"
+  # state_directory: "/var/lib/homelab-monitor-agent/plugins/state"
   # host_protocol_major: 1
   # max_artifact_bytes: <explicit byte limit>
+  # max_state_entries: <positive plugin count>
+  # max_state_bytes: <explicit byte limit>
   # poll_interval: "5m"
   # operation_timeout: "30s"
   # Explicitly choose plugin restart failure policy before enabling control.

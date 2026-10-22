@@ -76,8 +76,11 @@ type Config struct {
 		PermissionFile         string   `yaml:"permission_file"`
 		StagingDirectory       string   `yaml:"staging_directory"`
 		RuntimeDirectory       string   `yaml:"runtime_directory"`
+		StateDirectory         string   `yaml:"state_directory"`
 		HostProtocolMajor      uint16   `yaml:"host_protocol_major"`
 		MaxArtifactBytes       int64    `yaml:"max_artifact_bytes"`
+		MaxStateEntries        int      `yaml:"max_state_entries"`
+		MaxStateBytes          int64    `yaml:"max_state_bytes"`
 		PollInterval           Duration `yaml:"poll_interval"`
 		OperationTimeout       Duration `yaml:"operation_timeout"`
 		MaxConsecutiveFailures uint32   `yaml:"max_consecutive_failures"`
@@ -181,13 +184,14 @@ func (c Config) Validate() error {
 			{"permission_file", c.Plugins.PermissionFile},
 			{"staging_directory", c.Plugins.StagingDirectory},
 			{"runtime_directory", c.Plugins.RuntimeDirectory},
+			{"state_directory", c.Plugins.StateDirectory},
 		} {
 			if !filepath.IsAbs(entry.path) {
 				return fmt.Errorf("plugins.%s must be an absolute path", entry.name)
 			}
 		}
-		if c.Plugins.HostProtocolMajor == 0 || c.Plugins.MaxArtifactBytes < 1 || c.Plugins.PollInterval.Duration <= 0 || c.Plugins.OperationTimeout.Duration <= 0 {
-			return fmt.Errorf("plugins requires explicit protocol, artifact limit, poll interval, and operation timeout")
+		if c.Plugins.HostProtocolMajor == 0 || c.Plugins.MaxArtifactBytes < 1 || c.Plugins.MaxStateEntries < 1 || c.Plugins.MaxStateBytes < 1 || c.Plugins.PollInterval.Duration <= 0 || c.Plugins.OperationTimeout.Duration <= 0 {
+			return fmt.Errorf("plugins requires explicit protocol, artifact, local state, poll interval, and operation limits")
 		}
 		if c.Plugins.MaxConsecutiveFailures == 0 || c.Plugins.InitialFailureBackoff.Duration <= 0 || c.Plugins.MaxFailureBackoff.Duration < c.Plugins.InitialFailureBackoff.Duration {
 			return fmt.Errorf("plugins requires an explicit positive failure limit and ordered failure backoffs")

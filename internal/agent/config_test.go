@@ -76,7 +76,7 @@ func TestLoadConfigRequiresExplicitSecureMetricsBatchSettings(t *testing.T) {
 
 func TestLoadConfigRequiresExplicitSecurePluginRuntimeSettings(t *testing.T) {
 	directory := testutil.TempDir(t)
-	base := "server:\n  url: https://server.example\n  token: device-token\nagent:\n  device_id: n1\n  display_name: N1\nplugins:\n  enabled: true\n  publisher_key_path: " + filepath.Join(directory, "publisher.pub") + "\n  permission_file: " + filepath.Join(directory, "grants.json") + "\n  staging_directory: " + filepath.Join(directory, "staging") + "\n  runtime_directory: " + filepath.Join(directory, "runtime") + "\n  host_protocol_major: 1\n  max_artifact_bytes: 1048576\n  poll_interval: 1m\n  operation_timeout: 30s\n  max_consecutive_failures: 5\n  initial_failure_backoff: 1s\n  max_failure_backoff: 5m\n"
+	base := "server:\n  url: https://server.example\n  token: device-token\nagent:\n  device_id: n1\n  display_name: N1\nplugins:\n  enabled: true\n  publisher_key_path: " + filepath.Join(directory, "publisher.pub") + "\n  permission_file: " + filepath.Join(directory, "grants.json") + "\n  staging_directory: " + filepath.Join(directory, "staging") + "\n  runtime_directory: " + filepath.Join(directory, "runtime") + "\n  state_directory: " + filepath.Join(directory, "state") + "\n  host_protocol_major: 1\n  max_artifact_bytes: 1048576\n  max_state_entries: 16\n  max_state_bytes: 1048576\n  poll_interval: 1m\n  operation_timeout: 30s\n  max_consecutive_failures: 5\n  initial_failure_backoff: 1s\n  max_failure_backoff: 5m\n"
 	path := filepath.Join(directory, "agent.yaml")
 	if err := os.WriteFile(path, []byte(base), 0o600); err != nil {
 		t.Fatal(err)
@@ -90,7 +90,11 @@ func TestLoadConfigRequiresExplicitSecurePluginRuntimeSettings(t *testing.T) {
 		strings.Replace(base, "  max_consecutive_failures: 5\n", "", 1),
 		strings.Replace(base, "  initial_failure_backoff: 1s\n", "", 1),
 		strings.Replace(base, "  max_failure_backoff: 5m\n", "", 1),
+		strings.Replace(base, "  state_directory: "+filepath.Join(directory, "state")+"\n", "", 1),
+		strings.Replace(base, "  max_state_entries: 16\n", "", 1),
+		strings.Replace(base, "  max_state_bytes: 1048576\n", "", 1),
 		strings.Replace(base, "  publisher_key_path: "+filepath.Join(directory, "publisher.pub")+"\n", "  publisher_key_path: relative.pub\n", 1),
+		strings.Replace(base, "  state_directory: "+filepath.Join(directory, "state")+"\n", "  state_directory: relative-state\n", 1),
 	} {
 		if err := os.WriteFile(path, []byte(invalid), 0o600); err != nil {
 			t.Fatal(err)

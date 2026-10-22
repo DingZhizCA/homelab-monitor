@@ -98,8 +98,9 @@ func main() {
 		pluginRuntime, err = agentpkg.NewPluginRuntime(agentpkg.PluginRuntimeConfig{
 			ServerURL: config.Server.URL, DeviceID: config.Agent.DeviceID, DeviceToken: config.Server.Token,
 			PublisherKeyPath: config.Plugins.PublisherKeyPath, PermissionFile: config.Plugins.PermissionFile,
-			StagingDirectory: config.Plugins.StagingDirectory, RuntimeDirectory: config.Plugins.RuntimeDirectory,
+			StagingDirectory: config.Plugins.StagingDirectory, RuntimeDirectory: config.Plugins.RuntimeDirectory, StateDirectory: config.Plugins.StateDirectory,
 			HostProtocolMajor: config.Plugins.HostProtocolMajor, MaxArtifactBytes: config.Plugins.MaxArtifactBytes,
+			MaxStateEntries: config.Plugins.MaxStateEntries, MaxStateBytes: config.Plugins.MaxStateBytes,
 			OperationTimeout:       config.Plugins.OperationTimeout.Duration,
 			MaxConsecutiveFailures: config.Plugins.MaxConsecutiveFailures,
 			InitialFailureBackoff:  config.Plugins.InitialFailureBackoff.Duration,

@@ -34,15 +34,15 @@ HTTPS + Agent 主动轮询。数据平面使用限额批量 POST；控制平面�
 
 指标兼容接口为 `POST /api/v1/metrics`，接收一个 MetricEnvelope。新增 `POST /api/v1/metrics/batch` 接收 `{batch_id, device_id, snapshots}`，要求同设备、样本时间严格递增；调用方显式配置最大快照数和请求体字节数。路由必须绑定 HTTPS 设备 Token，并注入支持原子追加和按 batch ID 幂等去重的历史写入器。Agent 有显式快照条数、队列字节数、批次条数及请求体大小限制的 `BatchQueue` 和 `SendBatch` API，`SendPending` 按调用方触发单次发送，只有收到有效接收响应才确认队列内容；pending 批次可在确认前以相同 ID 重试。`cmd/agent` 已提供默认关闭的 `metrics_batch` 装配，只有 HTTPS、设备 Token、绝对私有状态目录和全部容量上限显式有效时才启用。运行时队列以带设备身份摘要和校验和的原子状态快照保存所有未确认快照及 pending ID；重启严格复验并恢复，目录同时只允许一个进程持锁，损坏或并发打开时拒绝启动。状态文件不采用追加日志，稳定数据文件和锁文件数量固定，数据大小受队列边界限制，崩溃临时文件会在启动时清理。队列不创建独立采样或发送定时器，队列满或持久化失败会拒绝新样本。Server 批量 Handler 在并发乱序上报时仅将采集时间晚于现有当前态的样本发布为最新状态。`cmd/server` 现可在同时显式配置 HTTPS、设备凭据、私有 SSD 存储目录、批次限制及存储维护/容量参数时挂载该路由；SQLite 写入器将批次摘要、Server 接收时间与完整快照在 `metrics.db` 的同一事务中提交，并在重启后继续按 batch ID 去重。新批次写入前检查数据库逻辑占用和文件系统保留空间；硬阈值触发一次有界过期清理和 PASSIVE checkpoint，仍不安全时返回 HTTP 507，Agent 不确认 pending 批次。重复且摘要一致的批次不增加存储，即使处于硬容量状态也可完成确认。启动时 Server 按设备恢复最新的已验证持久化快照，沿用原接收时间计算在线状态，不广播伪造的 SSE 事件或重放设备控制；旧数据库迁移因无法还原历史接收时间，保守使用批次最后采样时间。所有相关参数为空时保持原有单快照兼容接口，不创建数据库。
 
-## 插件状态 API 初始边界
-Server 内部提供以下 Agent 插件状态 Handler，作为 P1 控制面接口基础：
+## 插件状态 API 边界
+Server 提供以下 Agent 插件状态 Handler：
 
 | 方法与路径 | 语义 |
 |---|---|
 | `GET /api/v1/agent/plugins/desired?device_id=...` | 返回该设备的期望插件状态快照 |
 | `POST /api/v1/agent/plugins/reported` | 接收一个设备的批量已观察/已应用状态 |
 
-期望状态响应为 `{ "device_id": "...", "states": [DesiredState, ...] }`；上报请求为 `{ "device_id": "...", "states": [ReportedState, ...] }`，成功返回 HTTP 202 和接收条目数。两条路由都要求 HTTPS 和绑定到请求 `device_id` 的 Bearer Token。批量上报在版本校验、设备范围校验全部通过后一次提交；过期状态拒绝整批。Handler 依赖窄化的状态存储接口，当前 Registry 实现仅驻留内存。`cmd/server` 尚未挂载这两条路由；Agent 客户端已实现，但未接入主循环。只有确定凭据安全加载方式及状态持久化边界后才启用路由。制品下载、激活和回滚不属于这些 API 的行为。
+期望状态响应为 `{ "device_id": "...", "states": [DesiredState, ...] }`；上报请求为 `{ "device_id": "...", "states": [ReportedState, ...] }`，成功返回 HTTP 202 和接收条目数。两条路由都要求 HTTPS 和绑定到请求 `device_id` 的 Bearer Token。批量上报在版本校验、设备范围校验全部通过后一次提交；过期状态拒绝整批。Handler 依赖窄化仓储接口；`cmd/server` 只有在 SQLite、人类认证、设备认证及私有制品仓库全部显式配置时才挂载持久化 Desired/Reported、审计和制品路由。Agent 插件控制默认关闭，启用时使用独立轮询和操作截止时间，并要求本机信任根、grant、私有 staging/runtime/state 目录、制品上限及本地状态条目/字节上限。Agent 以带设备身份摘要和校验和的原子状态文件保留 observed intent、当前/前序包以及退避/隔离决策；重启不会仅凭本地记录启动旧进程，首次拉取 Server Desired 后才复验暂存包并恢复。同一 Revision 的隔离跨重启保留，新 Revision 才解除。制品下载由独立认证路由完成；激活和回滚仍属于 Agent 本地行为。
 
 ## 设备认证建议
 TLS 校验 Server；各 Agent 独立设备级令牌（服务器只存校验凭据，scope 绑定 Device ID），预留未来 mTLS 和 CA 轮换。首次注册采用一次性批准及最小范围 bootstrap 凭据。令牌不与用户 Session 或 Newifi SSH 密钥共享。mTLS 是否首版替代 Token 保留实施前安全复核，不影响数据模型。

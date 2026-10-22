@@ -40,7 +40,7 @@ Linux 下 `ExecSupervisor` 可将已暂存的二进制直接作为独立子进�
 
 Supervisor 在进程启动后、返回句柄前再次检查启动上下文；若 deadline 在 `exec.Start` 成功期间到期，会终止新进程并等待清理完成，避免将已超时的启动作为成功交付。
 
-Agent 插件对账在每个显式控制轮询中检查已管理插件的健康状态。升级后活动记录保留一个前序已应用包；健康检查失败时先关闭当前进程，再尝试启动该前序包并报告其实际 Applied Revision；没有前序包时才重启当前包。即使恢复启动成功，这次健康失败仍计入连续失败并执行退避，避免反复崩溃的插件通过成功拉起绕过熔断。启动、下载、校验或健康恢复连续失败时，使用必填配置的 `max_consecutive_failures`、`initial_failure_backoff` 和 `max_failure_backoff` 执行指数退避，到达上限后将该 Desired Revision 标记为 Quarantined；若同一 Desired Revision 的插件仍活动，会尝试停止它，停止失败则报告 Degraded；若旧版本仍在活动则保留它并报告 Degraded。新的 Desired Revision 清除隔离记录。该机制不创建独立监控定时器，进程故障发现时延受既有插件控制轮询间隔影响；仅保留一个前序包，故障计数和前序版本关联未持久化，Agent 重启会重置退避/隔离状态并丢失运行期回滚关联。
+Agent 插件对账在每个显式控制轮询中检查已管理插件的健康状态。升级后活动记录保留一个前序已应用包；健康检查失败时先关闭当前进程，再尝试启动该前序包并报告其实际 Applied Revision；没有前序包时才重启当前包。即使恢复启动成功，这次健康失败仍计入连续失败并执行退避，避免反复崩溃的插件通过成功拉起绕过熔断。启动、下载、校验或健康恢复连续失败时，使用必填配置的 `max_consecutive_failures`、`initial_failure_backoff` 和 `max_failure_backoff` 执行指数退避，到达上限后将该 Desired Revision 标记为 Quarantined；若同一 Desired Revision 的插件仍活动，会尝试停止它，停止失败则报告 Degraded；若旧版本仍在活动则保留它并报告 Degraded。新的 Desired Revision 清除隔离记录。已观察意图、当前和单个前序包关联、退避截止及隔离状态写入显式条目/字节上限内的私有原子状态文件；文件绑定设备身份、校验和及单进程锁，损坏、身份不符、越界或权限过宽时拒绝启动。Agent 重启不自动启动旧插件；首次收到 Server Desired 后才复验暂存包并恢复允许运行的当前版本，回滚包在实际使用时同样复验。同一 Revision 的 Quarantined 状态不会因重启清除。该机制不创建独立监控定时器，进程故障发现时延受既有插件控制轮询间隔影响。
 
 `PreparedPlugin.Close` 不在生命周期锁内等待插件 RPC：它先拒绝新调用、关闭 Host 连接以取消在途 RPC，再按调用者 deadline 请求 Supervisor 停止进程。若进程停止失败，句柄保留供调用方重试；此逻辑不替代 Supervisor 的进程终止和资源限制实现。
 

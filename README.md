@@ -114,7 +114,7 @@ Server 可通过 `--tls-cert`、`--tls-key` 启用 HTTPS，并通过 `--agent-cr
 
 告警规则管理同样默认关闭。完整启用人类认证后，再显式提供正值的 `--alert-rule-max-body-bytes`、`--alert-rule-max-depth` 和 `--alert-rule-max-conditions`，Server 才会挂载 Owner 规则路由。规则 Revision、当前指针及审计事件持久化到 `core.db`；这些参数只限制请求和表达式复杂度，不提供任何隐式阈值、规则模板或 Incident 策略。告警评估另由 `--alert-evaluation-enabled` 显式开启，并要求正值的 `--alert-evaluation-interval`、`--alert-evaluation-timeout`、`--alert-evaluation-max-rules`、`--incident-max-states`，以及明确给出 `--incident-pending-for`、`--incident-recovery-for`、`--incident-unknown-behavior` 和 `--incident-disabled-behavior`；立即转换必须写成 `0s`。调度器以稳定游标跨轮分页，只读取 Server 当前快照；单轮串行且有界，失败按规则隔离并记录，不触发采集。
 
-Agent 插件控制循环默认关闭。启用前必须显式配置插件公钥、权限 grant 文件、私有 staging/runtime 目录、协议版本、单制品大小上限、独立控制轮询间隔和操作超时；该循环与指标采样周期独立。Server 端还必须完整启用 SQLite、人类认证、设备认证，并提供现有私有绝对路径 `--plugin-artifact-dir` 和正值 `--plugin-max-artifact-bytes`。缺少任一依赖时插件控制路由不会启动。
+Agent 插件控制循环默认关闭。启用前必须显式配置插件公钥、权限 grant 文件、私有 staging/runtime/state 目录、协议版本、单制品大小上限、本地状态条目/字节上限、独立控制轮询间隔和操作超时；该循环与指标采样周期独立。本地状态以设备身份摘要、校验和、单写者锁和原子替换保存已观察意图、当前/前序包以及退避/隔离决策。Agent 启动时不自动拉起旧进程；首次取得 Server Desired 后才复验暂存包并恢复，同一 Revision 的隔离跨重启保留，新 Revision 才解除。Server 端还必须完整启用 SQLite、人类认证、设备认证，并提供现有私有绝对路径 `--plugin-artifact-dir` 和正值 `--plugin-max-artifact-bytes`。缺少任一依赖时插件控制路由不会启动。
 
 `plugin-pack` 可用可选的 `--repository` 将刚签名且保留在 `--output` 中供审查的 bundle 原子导入 Server 制品仓库；重复导入相同字节幂等，冲突字节拒绝。导入制品不会自动创建或启用 Desired State。
 
@@ -170,7 +170,7 @@ curl --request POST \
 
 ## systemd 部署
 
-示例单元位于 [deployments/systemd](deployments/systemd)。Agent 单元通过 `StateDirectory=homelab-monitor-agent` 提供私有可写目录；启用持久化批队列时，配置应使用其下的 `/var/lib/homelab-monitor-agent/metrics-queue`。安装二进制、配置文件并创建非特权用户后，可启用服务：
+示例单元位于 [deployments/systemd](deployments/systemd)。Agent 单元通过 `StateDirectory=homelab-monitor-agent` 提供私有可写目录；启用持久化批队列时，配置应使用其下的 `/var/lib/homelab-monitor-agent/metrics-queue`，启用插件恢复状态时可使用 `/var/lib/homelab-monitor-agent/plugins/state`。安装二进制、配置文件并创建非特权用户后，可启用服务：
 
 ```bash
 sudo systemctl daemon-reload
@@ -215,7 +215,7 @@ web/                  React Dashboard
 - 兼容单快照接口只更新内存；只有持久化批量接口写入的设备快照会在 Server 重启时恢复。刷新任务仍为进程内状态，不会恢复。
 - 持久化认证、Owner 管理、内建当前指标、原始历史查询和 Dashboard 管理必须通过完整显式参数启用；默认运行保持这些路由关闭。共享发布只允许引用当前内建 Descriptor，更细粒度设备/字段 ACL 和敏感操作再认证尚未实现。
 - 告警规则的不可变历史、回滚和审计可持久化装配；有界评估调度可从 Server 当前快照推进带容量和时间戳 CAS 的 SQLite Incident 状态。规则删除和跨 Revision Incident 迁移、通知去重、静默和投递仍未实现。
-- 插件 Desired/Reported State、审计和制品路由可由 `cmd/server` 显式装配；制品仓库尚无总配额与清理策略，Agent 回滚关联和隔离状态仍不持久。
-- Agent 的有界批量队列与插件控制均默认关闭，启用插件仍需本机信任根、权限 grant 和运行参数全部有效。
+- 插件 Desired/Reported State、审计和制品路由可由 `cmd/server` 显式装配；Agent 可在有界私有状态中跨重启恢复回滚关联和同 Revision 隔离。制品仓库尚无总配额与清理策略。
+- Agent 的有界批量队列与插件控制均默认关闭，启用插件仍需本机信任根、权限 grant、私有状态目录及全部容量和运行参数有效。
 - 原始指标已有 SQLite 持久化、显式 PASSIVE WAL checkpoint、有界时间保留清理及软硬容量保护；PASSIVE 不负责截断 WAL 文件。容量参数尚未在目标设备调优，分层聚合、空间回收、流量归属账本和完整 Incident/通知流程尚未实现。
 - 插件进程当前为同 UID 子进程，缺少系统级 CPU、内存、文件和网络隔离，不能视为生产安全沙箱。
