@@ -19,9 +19,9 @@ Web 仅通过家庭 LAN 与 Tailnet 访问，不直接暴露公网。局域网�
 
 当前 `internal/auth` 提供 Argon2id 密码 verifier、Owner 原子初始化入口、Owner 创建账户、登录、当前角色解析和服务端 Session 撤销服务；Session 只向浏览器返回随机 Token，仓储仅接收 SHA-256 Token 摘要。未知或禁用账户的登录路径会执行同成本 dummy verifier；账户管理会复查调用者当前角色，禁用账户被解析时撤销其所有 Session。密码哈希使用随机盐 16 bytes、输出 32 bytes，成本参数为 19 MiB / 2 passes / parallelism 1，并严格拒绝其他 PHC 成本参数。该值达到 [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) 的最低推荐基线；尚未在目标 Server 上压测。`internal/server.AuthHandler` 提供 HTTPS bootstrap/login/session/logout/user-create 路由；写操作校验显式允许的 Origin，Session Cookie 设为 Secure、HttpOnly、SameSite=Lax。登录限速器使用有界固定窗口实现，尝试数、窗口和键容量必须由调用方提供。`RouterOptions.Auth` 被显式注入时，设备读取与 SSE 需要有效用户 Session，磁盘主动刷新仅 Owner 可用。
 
-Web 已有同源登录、首次 Owner 初始化和注销表单，以及 Session 检查：认证启用时，未登录页面不会请求设备 API、连接 SSE 或发送 Presence；Owner 创建后返回登录表单，登录成功后启动监控请求。Owner Session 可见的账户页调用 Owner 保护的账户创建、列表和状态修改 API，列表只返回 ID、用户名、角色和启用状态。角色或启用状态变更由用户仓储原子检查，始终保留至少一个启用 Owner；禁用账户的后续 Session 解析会拒绝并撤销其会话。若 Auth Handler 未注册，Server 返回认证 API 404，前端保持旧的无认证兼容路径。`internal/audit` 已定义不含自由文本和秘密载荷的最小管理事件；首次 Owner、账户创建、账户状态更新、插件 Desired State 发布、共享 Dashboard 管理和告警规则修订都要求对应仓储把事件与状态变更原子提交。认证中间件把已验证身份放入请求 Context，测试验证失败变更不留下状态或成功事件，幂等重试不会重复记录。生产审计仓储、敏感操作再认证和 Viewer 字段级授权仍未实现。
+Web 已有同源登录、首次 Owner 初始化和注销表单，以及 Session 检查：认证启用时，未登录页面不会请求设备 API、连接 SSE 或发送 Presence；Owner 创建后返回登录表单，登录成功后启动监控请求。Owner Session 可见的账户页调用 Owner 保护的账户创建、列表和状态修改 API，列表只返回 ID、用户名、角色和启用状态。角色或启用状态变更由用户仓储原子检查，始终保留至少一个启用 Owner；禁用账户的后续 Session 解析会拒绝并撤销其会话。若 Auth Handler 未注册，Server 返回认证 API 404，前端保持旧的无认证兼容路径。`internal/audit` 已定义不含自由文本和秘密载荷的最小管理事件；首次 Owner、账户创建、账户状态更新、插件 Desired State 发布、共享 Dashboard 管理和告警规则修订都要求对应仓储把事件与状态变更原子提交。认证中间件把已验证身份放入请求 Context。SQLite 用户、Session 和账户管理审计仓储已经实现同事务审计、当前 Owner 复核、重开恢复、并发初始化、失败零写入和撤销测试；其他业务域的生产审计、敏感操作再认证和 Viewer 字段级授权仍未实现。
 
-用户和 Session 仓储仍只有接口与内存测试替身，未确定生产持久化实现；`cmd/server` 不创建或注入 AuthHandler。认证能力尚未对实际 Server 启用，因此当前代码不构成可用于生产的完整登录系统。
+`cmd/server` 尚未创建或注入 AuthHandler，因为 Session TTL、允许的 HTTPS Origin 和登录限速器边界仍要求显式运行配置。认证能力尚未对实际 Server 启用，因此当前代码不构成可用于生产的完整登录系统。
 
 Server 的认证、Dashboard、插件状态、磁盘刷新及指标写请求均使用有界严格 JSON 解码：对象重复键、未知字段和多余 JSON 值会被拒绝，避免重复认证字段、`allow_wake` 或修订字段按解析器的“最后值覆盖”行为产生歧义。
 

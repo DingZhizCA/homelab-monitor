@@ -119,5 +119,5 @@ func (w *MetricBatchWriter) AppendBatch(ctx context.Context, batch metrics.Batch
 }
 
 func storageTimestamp(value time.Time) string {
-	return value.UTC().Format("2006-01-02T15:04:05.000000000Z")
+	return value.UTC().Format(storageTimeLayout)
 }

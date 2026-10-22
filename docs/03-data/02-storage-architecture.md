@@ -9,7 +9,9 @@
 
 两个数据库文件必须位于同一个显式配置的私有目录中。运行时负责校验 WAL、同步模式与外键开关，不静默退回其他模式。双库之间不提供原子事务；批次身份和对应指标必须同存于 `metrics.db`，需要审计的控制面变更及其审计事件必须同存于 `core.db`。
 
-当前第一版 `metrics.db` schema 保存批次 ID、设备 ID、内容 SHA-256、快照数，以及按设备和固定精度 UTC 采样时间索引的完整 `MetricEnvelope` JSON。原始历史适配器通过该索引流式读取范围内快照，复用 Dashboard Descriptor Registry 提取现有指标，并在达到请求点数时停止。该 schema 先确保协议兼容、事务原子性、重试幂等和有界结果；指标拆列、聚合表、留存和配额由后续迁移实现。`core.db` 当前只有迁移账本，尚未接入用户、Session、审计或插件状态仓储。
+当前第一版 `metrics.db` schema 保存批次 ID、设备 ID、内容 SHA-256、快照数，以及按设备和固定精度 UTC 采样时间索引的完整 `MetricEnvelope` JSON。原始历史适配器通过该索引流式读取范围内快照，复用 Dashboard Descriptor Registry 提取现有指标，并在达到请求点数时停止。该 schema 先确保协议兼容、事务原子性、重试幂等和有界结果；指标拆列、聚合表、留存和配额由后续迁移实现。
+
+`core.db` 已有用户、服务端 Session 和通用审计事件 schema。认证仓储将首次 Owner、Owner 创建账户及角色/启用状态变更与对应审计事件放在同一事务，原子复核当前 Owner 和最后 Owner 约束；Session 只保存 SHA-256 Token 摘要。Session 过期清理周期仍未确定，因此当前没有后台清理任务。插件状态、Dashboard、告警规则和 Incident 尚未接入该库。
 
 ## 数据域
 | 数据域 | 主要数据 | 保护重点 |

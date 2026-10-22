@@ -35,7 +35,7 @@ func TestOpenCreatesIsolatedDatabasesWithApprovedSettings(t *testing.T) {
 	for name, fixture := range map[string]struct {
 		database *sql.DB
 		want     int
-	}{"core": {databases.Core, 0}, "metrics": {databases.Metrics, 1}} {
+	}{"core": {databases.Core, 1}, "metrics": {databases.Metrics, 1}} {
 		var count int
 		if err := fixture.database.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 			t.Fatalf("%s migration ledger: %v", name, err)
@@ -65,7 +65,7 @@ func TestApplyMigrationsIsTransactionalAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = databases.Close() })
-	migrations := []Migration{{Version: 1, Name: "create_fixture", SQL: `CREATE TABLE fixture (id INTEGER PRIMARY KEY, value TEXT NOT NULL)`}}
+	migrations := []Migration{{Version: 1001, Name: "create_fixture", SQL: `CREATE TABLE fixture (id INTEGER PRIMARY KEY, value TEXT NOT NULL)`}}
 	if err := ApplyMigrations(context.Background(), databases.Core, migrations); err != nil {
 		t.Fatal(err)
 	}
@@ -73,11 +73,11 @@ func TestApplyMigrationsIsTransactionalAndIdempotent(t *testing.T) {
 		t.Fatalf("repeat migrations: %v", err)
 	}
 	var count int
-	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 1 {
+	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("migration count=%d err=%v", count, err)
 	}
 
-	failing := append(migrations, Migration{Version: 2, Name: "rollback_fixture", SQL: `CREATE TABLE must_rollback (id INTEGER); INSERT INTO missing_table VALUES (1)`})
+	failing := append(migrations, Migration{Version: 1002, Name: "rollback_fixture", SQL: `CREATE TABLE must_rollback (id INTEGER); INSERT INTO missing_table VALUES (1)`})
 	if err := ApplyMigrations(context.Background(), databases.Core, failing); err == nil {
 		t.Fatal("invalid migration succeeded")
 	}
@@ -92,13 +92,13 @@ func TestApplyMigrationsRejectsChangedHistoryAndInvalidOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = databases.Close() })
-	if err := ApplyMigrations(context.Background(), databases.Core, []Migration{{Version: 1, Name: "original", SQL: `CREATE TABLE fixture (id INTEGER)`}}); err != nil {
+	if err := ApplyMigrations(context.Background(), databases.Core, []Migration{{Version: 1001, Name: "original", SQL: `CREATE TABLE fixture (id INTEGER)`}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ApplyMigrations(context.Background(), databases.Core, []Migration{{Version: 1, Name: "changed", SQL: `SELECT 1`}}); err == nil {
+	if err := ApplyMigrations(context.Background(), databases.Core, []Migration{{Version: 1001, Name: "changed", SQL: `SELECT 1`}}); err == nil {
 		t.Fatal("changed migration identity was accepted")
 	}
-	if err := ApplyMigrations(context.Background(), databases.Core, []Migration{{Version: 2, Name: "second", SQL: `SELECT 1`}, {Version: 1, Name: "first", SQL: `SELECT 1`}}); err == nil {
+	if err := ApplyMigrations(context.Background(), databases.Core, []Migration{{Version: 1002, Name: "second", SQL: `SELECT 1`}, {Version: 1001, Name: "first", SQL: `SELECT 1`}}); err == nil {
 		t.Fatal("out-of-order migrations were accepted")
 	}
 }
