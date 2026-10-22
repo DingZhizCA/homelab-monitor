@@ -75,6 +75,29 @@ var coreMigrations = []Migration{
 	);
 	CREATE INDEX plugin_reported_device ON plugin_reported_states (device_id, plugin_id);`,
 	},
+	{
+		Version: 3,
+		Name:    "dashboard_revisions_and_publication",
+		SQL: `CREATE TABLE dashboards (
+		dashboard_id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		scope TEXT NOT NULL CHECK (scope IN ('personal', 'shared')),
+		owner_user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+		next_revision INTEGER NOT NULL CHECK (next_revision > 1),
+		draft_revision INTEGER NOT NULL CHECK (draft_revision > 0),
+		published_revision INTEGER CHECK (published_revision IS NULL OR published_revision > 0)
+	);
+	CREATE INDEX dashboards_owner ON dashboards (owner_user_id, dashboard_id);
+	CREATE INDEX dashboards_shared_publication ON dashboards (scope, published_revision, dashboard_id);
+	CREATE TABLE dashboard_revisions (
+		dashboard_id TEXT NOT NULL REFERENCES dashboards(dashboard_id) ON DELETE CASCADE,
+		revision INTEGER NOT NULL CHECK (revision > 0),
+		document_json BLOB NOT NULL,
+		published INTEGER NOT NULL CHECK (published IN (0, 1)),
+		PRIMARY KEY (dashboard_id, revision)
+	);
+	CREATE INDEX dashboard_published_revisions ON dashboard_revisions (dashboard_id, published, revision DESC);`,
+	},
 }
 
 // AuthRepository implements the auth user and session persistence boundaries.

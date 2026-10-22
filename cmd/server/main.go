@@ -67,6 +67,7 @@ func run() error {
 	authLoginWindow := flag.Duration("auth-login-window", 0, "login limiter fixed-window duration")
 	historyMaxRange := flag.Duration("history-max-range", 0, "maximum time range for one historical metric query")
 	historyMaxPoints := flag.Int("history-max-points", 0, "maximum observations returned by one historical metric query")
+	dashboardMaxBodyBytes := flag.Int64("dashboard-max-body-bytes", 0, "maximum Dashboard mutation request body bytes")
 	pluginArtifactDirectory := flag.String("plugin-artifact-dir", "", "private immutable plugin artifact repository directory")
 	pluginMaxArtifactBytes := flag.Int64("plugin-max-artifact-bytes", 0, "maximum plugin artifact bytes read or served")
 	flag.Parse()
@@ -157,6 +158,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	dashboards, err := buildDashboardRuntime(databases, humanAuth, dashboardRuntimeConfig{maxBodyBytes: *dashboardMaxBodyBytes})
+	if err != nil {
+		return err
+	}
 	pluginsRuntime, err := buildPluginRuntime(databases, deviceAuthorizer, humanAuth, pluginRuntimeConfig{
 		artifactDirectory: *pluginArtifactDirectory,
 		maxArtifactBytes:  *pluginMaxArtifactBytes,
@@ -174,6 +179,7 @@ func run() error {
 	options := server.RouterOptions{API: handler, MetricsBatch: metricsBatch, WebDirectory: *webDir}
 	if humanAuth != nil {
 		options.Auth = humanAuth.handler
+		options.Dashboards = dashboards
 		options.MetricQueries = humanAuth.queries
 		options.MetricHistory = humanAuth.history
 	}

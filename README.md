@@ -110,7 +110,7 @@ Server 可通过 `--tls-cert`、`--tls-key` 启用 HTTPS，并通过 `--agent-cr
 
 持久化批量指标入口默认关闭。启用时必须同时显式提供 `--storage-dir`、`--metrics-batch-max-snapshots` 和 `--metrics-batch-max-body-bytes`，并配置上述 HTTPS 与逐设备凭据。`--storage-dir` 必须是 Alienware 本地 SSD 上仅 Owner 可访问的目录；程序会在其中创建 `core.db` 和 `metrics.db`。只要启用存储，还必须提供正值的 `--storage-checkpoint-interval`、`--storage-checkpoint-wal-bytes`、`--storage-checkpoint-timeout`、`--storage-retention-interval`、`--storage-raw-retention`、`--storage-receipt-retention`、`--storage-retention-delete-limit`、`--storage-retention-timeout`、`--storage-core-max-bytes`、`--storage-metrics-soft-bytes`、`--storage-metrics-hard-bytes` 和 `--storage-filesystem-min-bytes`；凭据保留窗口必须长于原始指标窗口，指标软阈值必须低于硬阈值。参数不完整时 Server 拒绝启动，不会自行选择维护周期、保留期限、操作预算、容量或批次默认值。
 
-人类用户认证和指标查询也默认关闭。启用时必须提供 `--storage-dir`、至少一个 `--auth-origin`，以及正值的 `--auth-session-ttl`、`--auth-login-max-keys`、`--auth-login-max-attempts`、`--auth-login-window`、`--history-max-range` 和 `--history-max-points`；同时必须配置 HTTPS。参数不完整时 Server 拒绝启动，不会采用隐式 TTL、限速或历史查询预算。启用后，Owner 与 Viewer 均可读取现有内建当前值和历史指标；账户变更和主动磁盘刷新仍要求 Owner。
+人类用户认证和指标查询也默认关闭。启用时必须提供 `--storage-dir`、至少一个 `--auth-origin`，以及正值的 `--auth-session-ttl`、`--auth-login-max-keys`、`--auth-login-max-attempts`、`--auth-login-window`、`--history-max-range` 和 `--history-max-points`；同时必须配置 HTTPS。参数不完整时 Server 拒绝启动，不会采用隐式 TTL、限速或历史查询预算。启用后，Owner 与 Viewer 均可读取现有内建当前值和历史指标；账户变更和主动磁盘刷新仍要求 Owner。再提供正值的 `--dashboard-max-body-bytes` 会挂载持久化 Dashboard 路由；共享草稿的创建、保存、发布、回滚和审计在 `core.db` 同一事务提交，未配置时该路由保持关闭。
 
 Agent 插件控制循环默认关闭。启用前必须显式配置插件公钥、权限 grant 文件、私有 staging/runtime 目录、协议版本、单制品大小上限、独立控制轮询间隔和操作超时；该循环与指标采样周期独立。Server 端还必须完整启用 SQLite、人类认证、设备认证，并提供现有私有绝对路径 `--plugin-artifact-dir` 和正值 `--plugin-max-artifact-bytes`。缺少任一依赖时插件控制路由不会启动。
 
@@ -135,6 +135,7 @@ Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设�
 | `GET` | `/api/v1/dashboard/metrics/descriptors` | 可选：读取内建指标描述符 |
 | `GET` | `/api/v1/dashboard/metrics/latest` | 可选：读取 Server 内存中的最新指标 |
 | `GET` | `/api/v1/dashboard/metrics/history` | 可选：显式启用认证和历史预算后读取 SQLite 中的有界历史指标 |
+| `GET/POST/PUT` | `/api/v1/dashboards*` | 可选：认证用户管理持久化个人 Dashboard，Owner 管理共享草稿、发布历史和回滚 |
 | `GET/POST` | `/api/v1/agent/plugins/*` | 可选：设备认证的 Desired State 拉取、Reported State 上报和制品下载 |
 | `PUT` | `/api/v1/owner/plugins/desired` | 可选：Owner 发布带原子审计的插件期望状态 |
 | `GET/PUT` | `/api/v1/owner/alert-rules` | 可选：装配认证和规则仓储后由 Owner 列出或按 CAS 保存规则 |
@@ -210,7 +211,7 @@ web/                  React Dashboard
 ## 当前限制
 
 - 兼容单快照接口只更新内存；只有持久化批量接口写入的设备快照会在 Server 重启时恢复。刷新任务仍为进程内状态，不会恢复。
-- 持久化认证、Owner 管理、内建当前指标和原始历史查询必须通过完整显式参数启用；默认运行保持这些路由关闭。
+- 持久化认证、Owner 管理、内建当前指标、原始历史查询和 Dashboard 管理必须通过完整显式参数启用；默认运行保持这些路由关闭。共享发布只允许引用当前内建 Descriptor，更细粒度设备/字段 ACL 和敏感操作再认证尚未实现。
 - 插件 Desired/Reported State、审计和制品路由可由 `cmd/server` 显式装配；制品仓库尚无总配额与清理策略，Agent 回滚关联和隔离状态仍不持久。
 - Agent 的有界批量队列与插件控制均默认关闭，启用插件仍需本机信任根、权限 grant 和运行参数全部有效。
 - 原始指标已有 SQLite 持久化、显式 PASSIVE WAL checkpoint、有界时间保留清理及软硬容量保护；PASSIVE 不负责截断 WAL 文件。容量参数尚未在目标设备调优，分层聚合、空间回收、流量归属账本和完整 Incident/通知流程尚未实现。

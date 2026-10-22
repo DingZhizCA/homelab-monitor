@@ -36,6 +36,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if runtime, err := buildAuthRuntime(nil, nil, authRuntimeConfig{}); err != nil || runtime != nil {
 		t.Fatalf("disabled auth runtime=%v err=%v", runtime, err)
 	}
+	if handler, err := buildDashboardRuntime(nil, nil, dashboardRuntimeConfig{}); err != nil || handler != nil {
+		t.Fatalf("disabled Dashboard handler=%v err=%v", handler, err)
+	}
 	if runtime, err := buildPluginRuntime(nil, nil, nil, pluginRuntimeConfig{}); err != nil || runtime != nil {
 		t.Fatalf("disabled plugin runtime=%v err=%v", runtime, err)
 	}
@@ -56,6 +59,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	partialAuth := authRuntimeConfig{origins: []string{"https://monitor.example"}}
 	if runtime, err := buildAuthRuntime(nil, nil, partialAuth); err == nil || runtime != nil {
 		t.Fatalf("partial auth runtime=%v err=%v", runtime, err)
+	}
+	if handler, err := buildDashboardRuntime(nil, nil, dashboardRuntimeConfig{maxBodyBytes: 1024}); err == nil || handler != nil {
+		t.Fatalf("partial Dashboard handler=%v err=%v", handler, err)
 	}
 	if runtime, err := buildPluginRuntime(nil, nil, nil, pluginRuntimeConfig{artifactDirectory: "/private/plugins"}); err == nil || runtime != nil {
 		t.Fatalf("partial plugin runtime=%v err=%v", runtime, err)
@@ -215,6 +221,10 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dashboardHandler, err := buildDashboardRuntime(databases, humanAuth, dashboardRuntimeConfig{maxBodyBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
 	artifactDirectory := filepath.Join(testutil.TempDir(t), "artifacts")
 	if err := os.Mkdir(artifactDirectory, 0o700); err != nil {
 		t.Fatal(err)
@@ -248,7 +258,7 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	t.Cleanup(func() { _ = pluginsRuntime.Close() })
 	router, err := server.NewRouter(server.RouterOptions{
 		API: api, MetricsBatch: metricsBatch, Auth: humanAuth.handler,
-		MetricQueries: humanAuth.queries, MetricHistory: humanAuth.history,
+		Dashboards: dashboardHandler, MetricQueries: humanAuth.queries, MetricHistory: humanAuth.history,
 		PluginControl: pluginsRuntime.control, PluginArtifacts: pluginsRuntime.artifacts, PluginAdmin: pluginsRuntime.admin,
 	})
 	if err != nil {
@@ -284,6 +294,13 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	cookies := response.Result().Cookies()
 	if len(cookies) != 1 {
 		t.Fatalf("login cookies=%d", len(cookies))
+	}
+	request = authenticatedMutationRequest(http.MethodPost, "/api/v1/dashboards", `{"name":"Shared","scope":"shared","document":{"widgets":[{"id":"cpu","kind":"metric_card","title":"CPU","descriptor_id":"cpu.usage_percent"}],"layouts":[]}}`)
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"scope":"shared"`) {
+		t.Fatalf("Dashboard create status=%d body=%s", response.Code, response.Body.String())
 	}
 
 	for _, path := range []string{

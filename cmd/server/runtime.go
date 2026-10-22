@@ -1,7 +1,7 @@
 /*
 Package main assembles optional persistence, bounded storage maintenance and
-capacity protection, human authentication, and metric query runtimes from
-explicit Server command-line configuration.
+capacity protection, human authentication, Dashboard management, and metric
+query runtimes from explicit Server command-line configuration.
 
 Each feature remains disabled when all of its settings are absent. Partial
 configuration fails before the HTTP listener starts.
@@ -92,10 +92,17 @@ func (c authRuntimeConfig) disabled() bool {
 }
 
 type authRuntime struct {
-	handler *server.AuthHandler
-	queries *server.MetricQueryHandler
-	history *server.MetricHistoryHandler
+	handler  *server.AuthHandler
+	queries  *server.MetricQueryHandler
+	history  *server.MetricHistoryHandler
+	registry *dashboard.MetricRegistry
 }
+
+type dashboardRuntimeConfig struct {
+	maxBodyBytes int64
+}
+
+func (c dashboardRuntimeConfig) disabled() bool { return c.maxBodyBytes == 0 }
 
 type pluginRuntimeConfig struct {
 	artifactDirectory string
@@ -305,7 +312,29 @@ func buildAuthRuntime(databases *storage.Databases, current dashboard.SnapshotSo
 	if err != nil {
 		return nil, err
 	}
-	return &authRuntime{handler: handler, queries: queries, history: history}, nil
+	return &authRuntime{handler: handler, queries: queries, history: history, registry: registry}, nil
+}
+
+func buildDashboardRuntime(databases *storage.Databases, humanAuth *authRuntime, config dashboardRuntimeConfig) (*server.DashboardHandler, error) {
+	if config.disabled() {
+		return nil, nil
+	}
+	if databases == nil || humanAuth == nil || humanAuth.handler == nil || humanAuth.registry == nil || config.maxBodyBytes < 1 {
+		return nil, errors.New("storage, human authentication, and a positive Dashboard request limit are required together")
+	}
+	repository, err := storage.NewDashboardRepository(databases.Core)
+	if err != nil {
+		return nil, err
+	}
+	publication, err := dashboard.NewViewerPublicationPolicy(humanAuth.registry)
+	if err != nil {
+		return nil, err
+	}
+	service, err := dashboard.NewService(repository, publication)
+	if err != nil {
+		return nil, err
+	}
+	return server.NewDashboardHandler(service, humanAuth.handler, config.maxBodyBytes)
 }
 
 func buildPluginRuntime(databases *storage.Databases, devices server.DeviceAuthorizer, humanAuth *authRuntime, config pluginRuntimeConfig) (*pluginRuntime, error) {
