@@ -68,7 +68,7 @@
 
 ## 当前仓库整合说明
 
-分层架构文档与仓库原有基线文档共同维护。`docs/collector-design.md` 保留采集算法和 HDD 约束，`docs/comment-guidelines.md` 是 `AGENTS.md` 引用的代码规范，`docs/phase-1-spec.md` 记录既有运行协议基线，`docs/systemd-deployment-guide.md` 记录已验收部署状态；架构演进不得静默删除或覆盖这些资料。新旧说明冲突时先查决策台账，并在实施路线中明确当前代码状态。
+本索引中的分层文档是当前架构与实施状态的维护入口。代码变更约束直接记录在根目录 `AGENTS.md`；新旧说明冲突时先查决策台账，并在实施路线中明确当前代码状态。
 
 ## 边界声明
 

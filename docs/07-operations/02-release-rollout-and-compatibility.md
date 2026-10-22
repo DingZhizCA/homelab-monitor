@@ -5,7 +5,7 @@
 > **说明**：技术参数的具体默认数值需要在模块实施时验证；本文不构成现网变更指令。
 
 ## 与现有仓库关系
-已知仓库 `homelab-monitor` 含 cmd/agent、cmd/server、internal/agent、internal/server、configs、deployments/systemd、web 及已有 docs 文件。新文档为未来架构基线，不意味着代码已符合设计，也不覆盖 AGENTS.md/旧 Phase 1 文档。实施前应重新检查实际仓库状态、未提交改动、现有 API 契约与 systemd 单元。
+仓库 `homelab-monitor` 含 cmd/agent、cmd/server、internal/agent、internal/server、configs、deployments/systemd、web 及分层架构文档。规划目标不代表代码已经符合设计；实施前应重新检查实际仓库状态、未提交改动、现有 API 契约与 systemd 单元。
 
 ## 发布单位
 | 发布单元 | 升级路径 |

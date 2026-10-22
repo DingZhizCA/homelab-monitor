@@ -41,7 +41,7 @@
 | REC-007 | 插件制品传输 | Agent 使用设备凭据通过 HTTPS 拉取；Manifest、签名和二进制作为 multipart/form-data 独立部分传输，摘要必须与 Desired State 匹配 | 本地组件和测试已采用；`cmd` 装配与目标设备验收未完成 |
 
 ## 未批准修改的对象
-现有 Go 源码、AGENTS.md、现有 docs 原文、OpenWrt 网络配置、N1 sing-box、Tailscale、防火墙、systemd、Alienware 服务与磁盘配置均未因本套文档而被修改。
+OpenWrt 网络配置、N1 sing-box、Tailscale、防火墙、生产 systemd、Alienware 服务与磁盘配置均未因本套文档而被修改。代码和文档的实际落地状态以实施路线及 Git 历史为准。
 
 ## 架构与业务的分界
 架构项在本套文档明确边界、协议、模块、责任及故障策略；告警阈值、具体采样频率、保留天数、默认 Widget、PWA 细节、准确率阈值等仅列为候选值或延后决议，不视为正式定稿。

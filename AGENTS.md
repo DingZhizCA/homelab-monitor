@@ -2,9 +2,8 @@
 
 ## Comments and documentation
 
-All code changes must follow [`docs/comment-guidelines.md`](docs/comment-guidelines.md).
-The rules apply to Go, TypeScript/React, configuration, scripts, styles, and other
-maintained source files. Do not add comments that merely translate syntax.
+These rules apply to Go, TypeScript/React, configuration, scripts, styles, and
+other maintained source files. Do not add comments that merely translate syntax.
 
 When creating a maintained source file, add a useful file-level responsibility
 header unless the file is generated, declarative and self-explanatory, or the
