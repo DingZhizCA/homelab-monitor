@@ -2,12 +2,16 @@ package plugins
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestFileArtifactRepositoryStoresImmutablePackage(t *testing.T) {
@@ -25,7 +29,7 @@ func TestFileArtifactRepositoryStoresImmutablePackage(t *testing.T) {
 	}
 	bundle := PackageArtifact{ManifestJSON: manifestJSON, Signature: make([]byte, 64), Artifact: artifact}
 	key := ArtifactKey{PluginID: manifest.PluginID, Version: manifest.Version, Platform: manifest.Platform, SHA256: manifest.ArtifactSHA256}
-	repository, err := NewFileArtifactRepository(rootPath, 1024)
+	repository, err := NewFileArtifactRepository(rootPath, artifactTestLimits(1024))
 	if err != nil {
 		t.Fatalf("create repository: %v", err)
 	}
@@ -66,12 +70,12 @@ func TestFileArtifactRepositoryConcurrentIdenticalWritersAreIdempotent(t *testin
 	}
 	bundle := PackageArtifact{ManifestJSON: manifestJSON, Signature: make([]byte, 64), Artifact: artifact}
 	key := ArtifactKey{PluginID: manifest.PluginID, Version: manifest.Version, Platform: manifest.Platform, SHA256: manifest.ArtifactSHA256}
-	first, err := NewFileArtifactRepository(rootPath, 1024)
+	first, err := NewFileArtifactRepository(rootPath, artifactTestLimits(1024))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer first.Close()
-	second, err := NewFileArtifactRepository(rootPath, 1024)
+	second, err := NewFileArtifactRepository(rootPath, artifactTestLimits(1024))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +126,7 @@ func TestFileArtifactRepositoryConcurrentConflictingWritersRemainImmutable(t *te
 	}
 	repositories := make([]*FileArtifactRepository, 2)
 	for index := range repositories {
-		repositories[index], err = NewFileArtifactRepository(rootPath, 1024)
+		repositories[index], err = NewFileArtifactRepository(rootPath, artifactTestLimits(1024))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -166,10 +170,10 @@ func TestFileArtifactRepositoryRejectsUnsafeOrOversizedPackages(t *testing.T) {
 	if err := os.Chmod(rootPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewFileArtifactRepository(rootPath, 0); err == nil {
+	if _, err := NewFileArtifactRepository(rootPath, artifactTestLimits(0)); err == nil {
 		t.Fatal("missing artifact size limit was accepted")
 	}
-	repository, err := NewFileArtifactRepository(rootPath, 2)
+	repository, err := NewFileArtifactRepository(rootPath, artifactTestLimits(2))
 	if err != nil {
 		t.Fatalf("create repository: %v", err)
 	}
@@ -191,4 +195,150 @@ func TestFileArtifactRepositoryRejectsUnsafeOrOversizedPackages(t *testing.T) {
 	if _, err := repository.Get(key); err == nil {
 		t.Fatal("unsafe artifact key was accepted")
 	}
+}
+
+func TestFileArtifactRepositoryEnforcesTotalBytesAndPackageCount(t *testing.T) {
+	rootPath := t.TempDir()
+	if err := os.Chmod(rootPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	firstKey, firstBundle := artifactRepositoryTestBundle(t, "1.0.0", []byte("first"))
+	secondKey, secondBundle := artifactRepositoryTestBundle(t, "2.0.0", []byte("second"))
+	firstBytes := int64(len(firstBundle.ManifestJSON) + len(firstBundle.Signature) + len(firstBundle.Artifact))
+	repository, err := NewFileArtifactRepository(rootPath, ArtifactRepositoryLimits{
+		MaxArtifactBytes: 64, MaxRepositoryBytes: firstBytes, MaxPackages: 1, MaxScanEntries: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	if err := repository.Put(firstKey, firstBundle); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Put(firstKey, firstBundle); err != nil {
+		t.Fatalf("idempotent import was blocked at capacity: %v", err)
+	}
+	if err := repository.Put(secondKey, secondBundle); err == nil {
+		t.Fatal("package beyond repository capacity was accepted")
+	}
+}
+
+func TestFileArtifactRepositoryPrunesOnlyOldUnprotectedPackages(t *testing.T) {
+	rootPath := t.TempDir()
+	if err := os.Chmod(rootPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := NewFileArtifactRepository(rootPath, artifactTestLimits(1024))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	protectedKey, protectedBundle := artifactRepositoryTestBundle(t, "1.0.0", []byte("protected"))
+	removedKey, removedBundle := artifactRepositoryTestBundle(t, "2.0.0", []byte("removed"))
+	recentKey, recentBundle := artifactRepositoryTestBundle(t, "3.0.0", []byte("recent"))
+	for key, bundle := range map[ArtifactKey]PackageArtifact{protectedKey: protectedBundle, removedKey: removedBundle, recentKey: recentBundle} {
+		if err := repository.Put(key, bundle); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC()
+	old := now.Add(-2 * time.Hour)
+	for _, key := range []ArtifactKey{protectedKey, removedKey} {
+		if err := os.Chtimes(filepath.Join(rootPath, artifactRelativePath(key)), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := repository.Prune(context.Background(), map[ArtifactKey]struct{}{protectedKey: {}}, now.Add(-time.Hour), 1)
+	if err != nil || result.DeletedPackages != 1 || result.DeletedBytes == 0 {
+		t.Fatalf("prune result=%+v err=%v", result, err)
+	}
+	if _, err := repository.Get(protectedKey); err != nil {
+		t.Fatalf("protected artifact was removed: %v", err)
+	}
+	if _, err := repository.Get(recentKey); err != nil {
+		t.Fatalf("recent artifact was removed: %v", err)
+	}
+	if _, err := repository.Get(removedKey); err == nil {
+		t.Fatal("old unprotected artifact was retained")
+	}
+}
+
+func TestFileArtifactRepositorySerializesQuotaAcrossInstances(t *testing.T) {
+	rootPath := t.TempDir()
+	if err := os.Chmod(rootPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	limits := artifactTestLimits(1024)
+	limits.MaxPackages = 1
+	first, err := NewFileArtifactRepository(rootPath, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := NewFileArtifactRepository(rootPath, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	firstKey, firstBundle := artifactRepositoryTestBundle(t, "1.0.0", []byte("first"))
+	secondKey, secondBundle := artifactRepositoryTestBundle(t, "2.0.0", []byte("second"))
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() { <-start; results <- first.Put(firstKey, firstBundle) }()
+	go func() { <-start; results <- second.Put(secondKey, secondBundle) }()
+	close(start)
+	successes := 0
+	for range 2 {
+		if err := <-results; err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful quota-constrained imports=%d, want one", successes)
+	}
+}
+
+func TestFileArtifactRepositoryPruneHonorsContextWhileMutationLocked(t *testing.T) {
+	rootPath := t.TempDir()
+	if err := os.Chmod(rootPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	first, err := NewFileArtifactRepository(rootPath, artifactTestLimits(1024))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := NewFileArtifactRepository(rootPath, artifactTestLimits(1024))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if err := first.lockMutation(); err != nil {
+		t.Fatal(err)
+	}
+	defer first.unlockMutation()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := second.Prune(ctx, nil, time.Now(), 1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("prune lock wait error=%v", err)
+	}
+}
+
+func artifactRepositoryTestBundle(t *testing.T, version string, artifact []byte) (ArtifactKey, PackageArtifact) {
+	t.Helper()
+	digest := sha256.Sum256(artifact)
+	manifest := validManifest()
+	manifest.Version = version
+	manifest.ArtifactSHA256 = hex.EncodeToString(digest[:])
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ArtifactKey{PluginID: manifest.PluginID, Version: manifest.Version, Platform: manifest.Platform, SHA256: manifest.ArtifactSHA256}, PackageArtifact{
+		ManifestJSON: manifestJSON, Signature: make([]byte, 64), Artifact: artifact,
+	}
+}
+
+func artifactTestLimits(maxArtifactBytes int64) ArtifactRepositoryLimits {
+	return ArtifactRepositoryLimits{MaxArtifactBytes: maxArtifactBytes, MaxRepositoryBytes: 1 << 20, MaxPackages: 16, MaxScanEntries: 256}
 }

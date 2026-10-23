@@ -98,6 +98,32 @@ func TestPluginRepositoryRechecksCurrentOwnerBeforeDesiredMutation(t *testing.T)
 	}
 }
 
+func TestPluginRepositoryListsOnlyEnabledDesiredArtifactReferences(t *testing.T) {
+	databases := openTestDatabases(t)
+	ownerID := createPluginOwner(t, databases, "owner-a")
+	repository, err := NewPluginRepository(databases.Core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := pluginDesiredFixture(1, true)
+	if err := repository.SetDesiredWithAuditContext(context.Background(), enabled, pluginAuditFixture(t, ownerID, enabled)); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := repository.DesiredArtifactKeysContext(context.Background())
+	want := enabled.Artifact.Key(enabled.PluginID, enabled.Version)
+	if err != nil || len(keys) != 1 || keys[0] != want {
+		t.Fatalf("keys=%+v want=%+v err=%v", keys, want, err)
+	}
+	disabled := pluginDesiredFixture(2, false)
+	if err := repository.SetDesiredWithAuditContext(context.Background(), disabled, pluginAuditFixture(t, ownerID, disabled)); err != nil {
+		t.Fatal(err)
+	}
+	keys, err = repository.DesiredArtifactKeysContext(context.Background())
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("disabled Desired references=%+v err=%v", keys, err)
+	}
+}
+
 func TestPluginRepositoryReportedBatchIsAtomicAndDurable(t *testing.T) {
 	databases := openTestDatabases(t)
 	repository, err := NewPluginRepository(databases.Core)

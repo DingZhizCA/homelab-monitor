@@ -98,6 +98,31 @@ func (r *PluginRepository) DesiredForDeviceContext(ctx context.Context, deviceID
 	return states, nil
 }
 
+// DesiredArtifactKeysContext returns every artifact referenced by an enabled target.
+func (r *PluginRepository) DesiredArtifactKeysContext(ctx context.Context) ([]plugins.ArtifactKey, error) {
+	rows, err := r.database.QueryContext(ctx, `SELECT plugin_id, version, artifact_os, artifact_arch, artifact_sha256
+		FROM plugin_desired_states WHERE enabled = 1 ORDER BY plugin_id, version, artifact_os, artifact_arch, artifact_sha256`)
+	if err != nil {
+		return nil, fmt.Errorf("query desired plugin artifacts: %w", err)
+	}
+	defer rows.Close()
+	keys := make([]plugins.ArtifactKey, 0)
+	for rows.Next() {
+		var key plugins.ArtifactKey
+		if err := rows.Scan(&key.PluginID, &key.Version, &key.Platform.OS, &key.Platform.Arch, &key.SHA256); err != nil {
+			return nil, fmt.Errorf("scan desired plugin artifact: %w", err)
+		}
+		if err := key.Validate(); err != nil {
+			return nil, fmt.Errorf("validate desired plugin artifact: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate desired plugin artifacts: %w", err)
+	}
+	return keys, nil
+}
+
 // SetReportedBatchContext atomically stores a validated Agent report batch.
 func (r *PluginRepository) SetReportedBatchContext(ctx context.Context, states []plugins.ReportedState) error {
 	if err := plugins.ValidateReportedBatch(states); err != nil {

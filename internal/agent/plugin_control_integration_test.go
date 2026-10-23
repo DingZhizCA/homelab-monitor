@@ -84,7 +84,7 @@ func TestAgentDownloadsServerDesiredPackageAndVerifiesPublisherSignature(t *test
 	if err := os.Chmod(artifactRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	repository, err := plugins.NewFileArtifactRepository(artifactRoot, 1<<20)
+	repository, err := plugins.NewFileArtifactRepository(artifactRoot, plugins.ArtifactRepositoryLimits{MaxArtifactBytes: 1 << 20, MaxRepositoryBytes: 16 << 20, MaxPackages: 16, MaxScanEntries: 256})
 	if err != nil {
 		t.Fatal(err)
 	}

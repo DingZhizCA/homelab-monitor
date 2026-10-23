@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/audit"
@@ -26,14 +27,20 @@ type PluginDesiredStateWriter interface {
 type PluginAdminHandler struct {
 	store     PluginDesiredStateWriter
 	artifacts plugins.ArtifactRepository
+	mutation  sync.Locker
 }
 
 // NewPluginAdminHandler requires desired-state storage and the artifact repository.
 func NewPluginAdminHandler(store PluginDesiredStateWriter, artifacts plugins.ArtifactRepository) (*PluginAdminHandler, error) {
+	return NewPluginAdminHandlerWithMutationLock(store, artifacts, nil)
+}
+
+// NewPluginAdminHandlerWithMutationLock coordinates publication with artifact cleanup.
+func NewPluginAdminHandlerWithMutationLock(store PluginDesiredStateWriter, artifacts plugins.ArtifactRepository, mutation sync.Locker) (*PluginAdminHandler, error) {
 	if store == nil || artifacts == nil {
 		return nil, errors.New("plugin desired-state writer and artifact repository are required")
 	}
-	return &PluginAdminHandler{store: store, artifacts: artifacts}, nil
+	return &PluginAdminHandler{store: store, artifacts: artifacts, mutation: mutation}, nil
 }
 
 // SetDesired publishes one validated desired state after checking package availability.
@@ -53,6 +60,10 @@ func (h *PluginAdminHandler) SetDesired(w http.ResponseWriter, r *http.Request) 
 	if err := state.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_PLUGIN_STATE", err.Error())
 		return
+	}
+	if h.mutation != nil {
+		h.mutation.Lock()
+		defer h.mutation.Unlock()
 	}
 	if state.Enabled {
 		if _, err := h.artifacts.Get(state.Artifact.Key(state.PluginID, state.Version)); err != nil {

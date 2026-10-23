@@ -13,6 +13,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
@@ -132,19 +133,27 @@ func (c alertEvaluationRuntimeConfig) disabled() bool {
 }
 
 type pluginRuntimeConfig struct {
-	artifactDirectory string
-	maxArtifactBytes  int64
+	artifactDirectory  string
+	maxArtifactBytes   int64
+	maxRepositoryBytes int64
+	maxPackages        int
+	maxScanEntries     int
+	cleanupInterval    time.Duration
+	orphanGrace        time.Duration
+	cleanupDeleteLimit int
+	cleanupTimeout     time.Duration
 }
 
 func (c pluginRuntimeConfig) disabled() bool {
-	return c.artifactDirectory == "" && c.maxArtifactBytes == 0
+	return c.artifactDirectory == "" && c.maxArtifactBytes == 0 && c.maxRepositoryBytes == 0 && c.maxPackages == 0 && c.maxScanEntries == 0 && c.cleanupInterval == 0 && c.orphanGrace == 0 && c.cleanupDeleteLimit == 0 && c.cleanupTimeout == 0
 }
 
 type pluginRuntime struct {
-	control    *server.PluginControlHandler
-	artifacts  *server.PluginArtifactHandler
-	admin      *server.PluginAdminHandler
-	repository *plugins.FileArtifactRepository
+	control     *server.PluginControlHandler
+	artifacts   *server.PluginArtifactHandler
+	admin       *server.PluginAdminHandler
+	repository  *plugins.FileArtifactRepository
+	maintenance *plugins.ArtifactMaintenance
 }
 
 func (r *pluginRuntime) Close() error {
@@ -425,14 +434,17 @@ func buildPluginRuntime(databases *storage.Databases, devices server.DeviceAutho
 	if config.disabled() {
 		return nil, nil
 	}
-	if databases == nil || devices == nil || humanAuth == nil || config.artifactDirectory == "" || config.maxArtifactBytes < 1 {
-		return nil, errors.New("storage, device authentication, human authentication, plugin artifact directory, and positive artifact limit are required together")
+	if databases == nil || devices == nil || humanAuth == nil || config.artifactDirectory == "" || config.maxArtifactBytes < 1 || config.maxRepositoryBytes < config.maxArtifactBytes || config.maxPackages < 1 || config.maxScanEntries < config.maxPackages || config.cleanupInterval <= 0 || config.orphanGrace <= 0 || config.cleanupDeleteLimit < 1 || config.cleanupTimeout <= 0 {
+		return nil, errors.New("storage, authentication, plugin artifact directory, capacity limits, and bounded cleanup settings are required together")
 	}
 	state, err := storage.NewPluginRepository(databases.Core)
 	if err != nil {
 		return nil, err
 	}
-	artifacts, err := plugins.NewFileArtifactRepository(config.artifactDirectory, config.maxArtifactBytes)
+	artifacts, err := plugins.NewFileArtifactRepository(config.artifactDirectory, plugins.ArtifactRepositoryLimits{
+		MaxArtifactBytes: config.maxArtifactBytes, MaxRepositoryBytes: config.maxRepositoryBytes,
+		MaxPackages: config.maxPackages, MaxScanEntries: config.maxScanEntries,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -450,10 +462,26 @@ func buildPluginRuntime(databases *storage.Databases, devices server.DeviceAutho
 	if err != nil {
 		return nil, err
 	}
-	admin, err := server.NewPluginAdminHandler(state, artifacts)
+	mutation := &sync.Mutex{}
+	admin, err := server.NewPluginAdminHandlerWithMutationLock(state, artifacts, mutation)
+	if err != nil {
+		return nil, err
+	}
+	maintenance, err := plugins.NewArtifactMaintenance(artifacts, state, mutation, plugins.ArtifactMaintenanceConfig{
+		Interval: config.cleanupInterval, OrphanGrace: config.orphanGrace,
+		DeleteLimit: config.cleanupDeleteLimit, Timeout: config.cleanupTimeout,
+	}, logArtifactMaintenanceObservation)
 	if err != nil {
 		return nil, err
 	}
 	closeOnError = false
-	return &pluginRuntime{control: control, artifacts: download, admin: admin, repository: artifacts}, nil
+	return &pluginRuntime{control: control, artifacts: download, admin: admin, repository: artifacts, maintenance: maintenance}, nil
+}
+
+func logArtifactMaintenanceObservation(observation plugins.ArtifactMaintenanceObservation) {
+	if observation.Err != nil {
+		log.Printf("component=plugins level=ERROR cutoff=%q scanned_entries=%d packages=%d used_bytes=%d deleted_packages=%d deleted_bytes=%d duration=%q msg=%q", observation.Cutoff, observation.ScannedEntries, observation.Packages, observation.UsedBytes, observation.DeletedPackages, observation.DeletedBytes, observation.Duration, observation.Err)
+		return
+	}
+	log.Printf("component=plugins level=INFO cutoff=%q scanned_entries=%d packages=%d used_bytes=%d deleted_packages=%d deleted_bytes=%d duration=%q msg=%q", observation.Cutoff, observation.ScannedEntries, observation.Packages, observation.UsedBytes, observation.DeletedPackages, observation.DeletedBytes, observation.Duration, "bounded plugin artifact cleanup completed")
 }

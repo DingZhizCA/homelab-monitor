@@ -268,7 +268,8 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifactRepository, err := plugins.NewFileArtifactRepository(artifactDirectory, 1<<20)
+	artifactLimits := plugins.ArtifactRepositoryLimits{MaxArtifactBytes: 1 << 20, MaxRepositoryBytes: 16 << 20, MaxPackages: 16, MaxScanEntries: 256}
+	artifactRepository, err := plugins.NewFileArtifactRepository(artifactDirectory, artifactLimits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +279,11 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	if err := artifactRepository.Close(); err != nil {
 		t.Fatal(err)
 	}
-	pluginsRuntime, err := buildPluginRuntime(databases, allowTestDevice{}, humanAuth, pluginRuntimeConfig{artifactDirectory: artifactDirectory, maxArtifactBytes: 1 << 20})
+	pluginsRuntime, err := buildPluginRuntime(databases, allowTestDevice{}, humanAuth, pluginRuntimeConfig{
+		artifactDirectory: artifactDirectory, maxArtifactBytes: 1 << 20, maxRepositoryBytes: 16 << 20,
+		maxPackages: 16, maxScanEntries: 256, cleanupInterval: time.Hour, orphanGrace: 24 * time.Hour,
+		cleanupDeleteLimit: 2, cleanupTimeout: time.Second,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

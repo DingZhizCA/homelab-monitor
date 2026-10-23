@@ -30,22 +30,26 @@ func main() {
 	outputDirectory := flag.String("output", "", "new private output directory")
 	repositoryDirectory := flag.String("repository", "", "optional existing private Server artifact repository")
 	maxArtifactBytes := flag.Int64("max-artifact-bytes", 0, "required maximum input artifact size")
+	repositoryMaxBytes := flag.Int64("repository-max-bytes", 0, "required total repository byte limit when importing")
+	repositoryMaxPackages := flag.Int("repository-max-packages", 0, "required package count limit when importing")
+	repositoryMaxScanEntries := flag.Int("repository-max-scan-entries", 0, "required filesystem scan limit when importing")
 	flag.Parse()
 	if err := pack(*manifestPath, *artifactPath, *privateKeyPath, *outputDirectory, *maxArtifactBytes); err != nil {
 		fmt.Fprintln(os.Stderr, "plugin-pack:", err)
 		os.Exit(1)
 	}
 	if *repositoryDirectory != "" {
-		if err := publishBundle(*outputDirectory, *repositoryDirectory, *maxArtifactBytes); err != nil {
+		limits := plugins.ArtifactRepositoryLimits{MaxArtifactBytes: *maxArtifactBytes, MaxRepositoryBytes: *repositoryMaxBytes, MaxPackages: *repositoryMaxPackages, MaxScanEntries: *repositoryMaxScanEntries}
+		if err := publishBundle(*outputDirectory, *repositoryDirectory, limits); err != nil {
 			fmt.Fprintln(os.Stderr, "plugin-pack:", err)
 			os.Exit(1)
 		}
 	}
 }
 
-func publishBundle(bundleDirectory, repositoryDirectory string, maxArtifactBytes int64) error {
-	if bundleDirectory == "" || repositoryDirectory == "" || maxArtifactBytes < 1 {
-		return errors.New("bundle, repository, and positive max-artifact-bytes are required")
+func publishBundle(bundleDirectory, repositoryDirectory string, limits plugins.ArtifactRepositoryLimits) error {
+	if bundleDirectory == "" || repositoryDirectory == "" || limits.MaxArtifactBytes < 1 {
+		return errors.New("bundle, repository, and positive repository limits are required")
 	}
 	bundle := plugins.PackageArtifact{}
 	var err error
@@ -55,7 +59,7 @@ func publishBundle(bundleDirectory, repositoryDirectory string, maxArtifactBytes
 	if bundle.Signature, err = readBoundedFile(filepath.Join(bundleDirectory, "manifest.sig"), ed25519.SignatureSize); err != nil {
 		return fmt.Errorf("read bundle signature: %w", err)
 	}
-	if bundle.Artifact, err = readBoundedFile(filepath.Join(bundleDirectory, "artifact"), maxArtifactBytes); err != nil {
+	if bundle.Artifact, err = readBoundedFile(filepath.Join(bundleDirectory, "artifact"), limits.MaxArtifactBytes); err != nil {
 		return fmt.Errorf("read bundle artifact: %w", err)
 	}
 	var manifest plugins.Manifest
@@ -68,7 +72,7 @@ func publishBundle(bundleDirectory, repositoryDirectory string, maxArtifactBytes
 		return errors.New("bundle manifest must contain exactly one JSON value")
 	}
 	key := plugins.ArtifactKey{PluginID: manifest.PluginID, Version: manifest.Version, Platform: manifest.Platform, SHA256: manifest.ArtifactSHA256}
-	repository, err := plugins.NewFileArtifactRepository(repositoryDirectory, maxArtifactBytes)
+	repository, err := plugins.NewFileArtifactRepository(repositoryDirectory, limits)
 	if err != nil {
 		return err
 	}

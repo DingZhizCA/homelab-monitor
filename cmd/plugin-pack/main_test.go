@@ -155,10 +155,11 @@ func TestPublishBundleImportsImmutablePackageRepository(t *testing.T) {
 	writeTestFile(t, filepath.Join(bundleDirectory, "manifest.json"), bundle.ManifestJSON, 0o600)
 	writeTestFile(t, filepath.Join(bundleDirectory, "manifest.sig"), bundle.Signature, 0o600)
 	writeTestFile(t, filepath.Join(bundleDirectory, "artifact"), bundle.Artifact, 0o600)
-	if err := publishBundle(bundleDirectory, repositoryDirectory, 1024); err != nil {
+	limits := plugins.ArtifactRepositoryLimits{MaxArtifactBytes: 1024, MaxRepositoryBytes: 1 << 20, MaxPackages: 16, MaxScanEntries: 256}
+	if err := publishBundle(bundleDirectory, repositoryDirectory, limits); err != nil {
 		t.Fatal(err)
 	}
-	repository, err := plugins.NewFileArtifactRepository(repositoryDirectory, 1024)
+	repository, err := plugins.NewFileArtifactRepository(repositoryDirectory, limits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +168,7 @@ func TestPublishBundleImportsImmutablePackageRepository(t *testing.T) {
 	if err != nil || !bytes.Equal(stored.Artifact, artifact) {
 		t.Fatalf("stored artifact=%q err=%v", stored.Artifact, err)
 	}
-	if err := publishBundle(bundleDirectory, repositoryDirectory, 1024); err != nil {
+	if err := publishBundle(bundleDirectory, repositoryDirectory, limits); err != nil {
 		t.Fatalf("idempotent publish: %v", err)
 	}
 }

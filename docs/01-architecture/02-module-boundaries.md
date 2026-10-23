@@ -36,7 +36,7 @@
 
 本地人类用户的密码和服务端 Session 逻辑位于 `internal/auth`，HTTP 认证 Handler 位于 `internal/server`，其仓储接口与 Agent Device Token 校验相互独立。SQLite 适配器位于 `internal/storage`。`cmd/server` 只有在显式提供完整 HTTPS Origin、Session、限速、历史预算和存储参数时才注入 AuthHandler；启用后保护人类用户 API，并装配现有内建指标的当前值与历史查询。
 
-`cmd/server` 只负责读取启动参数、构造当前实现并启动 HTTP Server；稳定 API 路径由 `internal/server.NewRouter` 装配。插件控制面在完整显式配置 SQLite、人类与设备认证、私有制品目录和单制品上限时，使用 `storage.PluginRepository` 与 `FileArtifactRepository` 构造 Desired/Reported、制品下载和 Owner 管理 Handler；默认不挂载。业务 Handler 只依赖带 Context 与错误返回的仓储边界，数据库错误不会被静默转换为空 Desired State。
+`cmd/server` 只负责读取启动参数、构造当前实现并启动 HTTP Server；稳定 API 路径由 `internal/server.NewRouter` 装配。插件控制面在完整显式配置 SQLite、人类与设备认证、私有制品目录、单包/总量容量及有界清理参数时，使用 `storage.PluginRepository` 与 `FileArtifactRepository` 构造 Desired/Reported、制品下载、Owner 管理和制品维护；默认不挂载。业务 Handler 只依赖带 Context 与错误返回的仓储边界，数据库错误不会被静默转换为空 Desired State。Owner 发布与制品维护共享应用层互斥边界，制品仓库自身再以进程内读写锁和跨进程文件锁保护读取、导入和删除。
 
 ## 任务调度与事件
 定期采集由 Host/Agent 调度器负责；历史聚合、告警评估与通知由 Server 内部受控工作队列执行。第一版可使用有界内存队列加持久化任务状态，不引入外部 Message Broker。跨域事件需定义幂等键和失败重放策略。
