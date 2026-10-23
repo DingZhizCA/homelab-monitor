@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DingZhizCA/homelab-monitor/internal/jsonutil"
 	"github.com/DingZhizCA/homelab-monitor/internal/plugins"
 )
 
@@ -85,7 +86,11 @@ func (c *PluginControlClient) Desired(ctx context.Context, deviceID string) ([]p
 	if len(responseBody) > maxPluginControlResponse {
 		return nil, fmt.Errorf("plugin desired-state response exceeds size limit")
 	}
+	if err := jsonutil.RejectDuplicateObjectKeys(responseBody); err != nil {
+		return nil, fmt.Errorf("validate plugin collection policies: %w", err)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(responseBody))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode plugin desired state: %w", err)
 	}
@@ -143,6 +148,7 @@ func (c *PluginControlClient) CollectionPolicies(ctx context.Context, deviceID s
 	if err := decoder.Decode(&struct{}{}); err != io.EOF || result.DeviceID != deviceID {
 		return nil, fmt.Errorf("plugin collection-policy response must contain one matching device object")
 	}
+	seen := make(map[string]struct{}, len(result.Policies))
 	for _, policy := range result.Policies {
 		if policy.DeviceID != deviceID {
 			return nil, fmt.Errorf("plugin collection-policy response contains another device")
@@ -150,6 +156,11 @@ func (c *PluginControlClient) CollectionPolicies(ctx context.Context, deviceID s
 		if err := policy.Validate(); err != nil {
 			return nil, fmt.Errorf("plugin collection-policy response contains invalid policy: %w", err)
 		}
+		key := policy.PluginID + "/" + policy.CollectorID
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("plugin collection-policy response repeats %q", key)
+		}
+		seen[key] = struct{}{}
 	}
 	if result.Policies == nil {
 		result.Policies = []plugins.CollectionPolicy{}

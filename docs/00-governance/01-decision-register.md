@@ -39,7 +39,7 @@
 | ADR-027 | 插件进程基础资源边界 | Agent 生产装配必须通过独立非特权 `plugin-launcher` 在 `exec` 插件前设置硬 `RLIMIT_NOFILE`、`RLIMIT_NPROC`、`RLIMIT_FSIZE`、`RLIMIT_AS`、`RLIMIT_CPU` 和 `no_new_privs`；launcher 绝对路径与各限制值必须显式配置且无默认值。该层用于无竞态地建立基础进程边界，不宣称提供 cgroup 总量、RSS、不同 UID、文件系统或网络隔离 | 2026-10-23 按推荐采用 |
 | ADR-028 | 插件采集策略控制 | Collector 的启用、JSON 配置、采集周期和单次超时使用独立于插件制品 Desired State 的 Collection Policy；按 device/plugin/collector 独立单调修订并原子审计，不提供隐式采样参数。启用策略必须绑定已启用的具体插件 Desired Revision 且 Collector 存在于对应签名 Manifest，避免旧配置静默应用到升级后的 Collector；Server 要求显式每设备策略数量上限，单份 JSON 配置使用 64 KiB 协议硬上限 | 2026-10-23 用户确认采用推荐方案 |
 | ADR-029 | 插件观测持久化入口 | 插件观测使用独立于 `MetricEnvelope` 的 `{batch_id, device_id, observations}` 幂等协议和 `/api/v1/plugin-metrics/batch`；请求必须显式限制观测数、总样本数和字节数并绑定 HTTPS 设备凭据。批次摘要、接收时间和完整观测在 `metrics.db` 同一事务提交，复用指标库容量保护；原始观测和凭据分别沿用显式原始/凭据窗口有界清理。当前不将插件数据伪装成内建聚合或查询结果 | 2026-10-23 按推荐实施 |
-| ADR-030 | Agent 插件采集调度与队列 | Collection Policy 使用独立显式 tick 扫描到期任务，每轮策略数、任务数和跨批次并发均有硬上限；每个任务使用策略自身超时。一次到期尝试无论成功、失败或目标不可用都推进本地尝试时间，禁止按 tick 高频重试。成功观测进入独立原子快照队列，队列观测数、总样本数、编码字节及单批三项边界均显式配置；批次 ID 在确认前和重启后保持不变 | 2026-10-23 按推荐实施 |
+| ADR-030 | Agent 插件采集调度与队列 | Collection Policy 使用独立显式 tick 扫描到期任务，每轮策略数、任务数和跨批次并发均有硬上限；每个任务使用策略自身超时，Policy 或 Plugin Revision 变化时必须先通过无副作用配置校验。一次到期尝试无论成功、失败或目标不可用都推进本地尝试时间，禁止按 tick 高频重试。成功观测进入独立原子快照队列，队列观测数、总样本数、编码字节及单批三项边界均显式配置；批次 ID 在确认前和重启后保持不变 | 2026-10-23 按推荐实施 |
 
 ## 根据「全部按推荐」授权纳入基线、尚未逐项单独确认
 | ID | 领域 | 推荐基线 | 状态 |

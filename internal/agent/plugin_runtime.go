@@ -104,7 +104,19 @@ type pluginCollectionRuntime struct {
 	maxPolicies int
 	maxTasks    int
 	policies    []plugins.CollectionPolicy
-	lastAttempt map[string]time.Time
+	lastAttempt map[string]pluginPolicyAttempt
+	validated   map[string]pluginValidatedPolicy
+}
+
+type pluginPolicyAttempt struct {
+	policyRevision uint64
+	pluginRevision uint64
+	at             time.Time
+}
+
+type pluginValidatedPolicy struct {
+	policyRevision uint64
+	pluginRevision uint64
 }
 
 // NewPluginRuntime assembles plugin control only from explicit trust and resource settings.
@@ -180,7 +192,11 @@ func NewPluginRuntime(config PluginRuntimeConfig) (*PluginRuntime, error) {
 			_ = stager.Close()
 			return nil, fmt.Errorf("open plugin observation queue: %w", err)
 		}
-		collection = &pluginCollectionRuntime{scheduler: scheduler, queue: queue, sender: NewSender(config.ServerURL, config.DeviceToken), maxPolicies: collectionConfig.MaxPolicies, maxTasks: collectionConfig.MaxTasksPerRun, lastAttempt: make(map[string]time.Time)}
+		collection = &pluginCollectionRuntime{
+			scheduler: scheduler, queue: queue, sender: NewSender(config.ServerURL, config.DeviceToken),
+			maxPolicies: collectionConfig.MaxPolicies, maxTasks: collectionConfig.MaxTasksPerRun,
+			lastAttempt: make(map[string]pluginPolicyAttempt), validated: make(map[string]pluginValidatedPolicy),
+		}
 	}
 	return &PluginRuntime{
 		deviceID: config.DeviceID, control: control, reconciler: reconciler, stager: stager, stateStore: stateStore,
@@ -264,6 +280,18 @@ func (r *PluginRuntime) refreshCollectionPolicies(ctx context.Context) error {
 			delete(r.collection.lastAttempt, key)
 		}
 	}
+	for key, binding := range r.collection.validated {
+		keep := false
+		for _, policy := range policies {
+			if collectionPolicyKey(policy) == key && policy.Enabled && binding.policyRevision == policy.Revision && binding.pluginRevision == policy.PluginRevision {
+				keep = true
+				break
+			}
+		}
+		if !keep {
+			delete(r.collection.validated, key)
+		}
+	}
 	return nil
 }
 
@@ -295,16 +323,28 @@ func (r *PluginRuntime) CollectOnce(ctx context.Context) error {
 			continue
 		}
 		key := collectionPolicyKey(policy)
-		if previous := r.collection.lastAttempt[key]; !previous.IsZero() && now.Sub(previous) < time.Duration(policy.IntervalSeconds)*time.Second {
+		previous := r.collection.lastAttempt[key]
+		if previous.policyRevision == policy.Revision && previous.pluginRevision == policy.PluginRevision && !previous.at.IsZero() && now.Sub(previous.at) < time.Duration(policy.IntervalSeconds)*time.Second {
 			continue
 		}
 		// A failed or unavailable target still consumes this policy interval so a
 		// short scheduler tick cannot become an implicit high-rate retry loop.
-		r.collection.lastAttempt[key] = now
+		r.collection.lastAttempt[key] = pluginPolicyAttempt{policyRevision: policy.Revision, pluginRevision: policy.PluginRevision, at: now}
 		target, ok := r.reconciler.CollectionTarget(policy.PluginID, policy.PluginRevision)
 		if !ok {
 			runErrors = append(runErrors, fmt.Errorf("collection target %s is not active at desired revision %d", key, policy.PluginRevision))
 			continue
+		}
+		binding := r.collection.validated[key]
+		if binding.policyRevision != policy.Revision || binding.pluginRevision != policy.PluginRevision {
+			validateCtx, cancel := context.WithTimeout(operationCtx, time.Duration(policy.TimeoutMilliseconds)*time.Millisecond)
+			err := target.ValidateConfig(validateCtx, policy.CollectorID, policy.Config)
+			cancel()
+			if err != nil {
+				runErrors = append(runErrors, fmt.Errorf("validate collection policy %s revision %d: %w", key, policy.Revision, err))
+				continue
+			}
+			r.collection.validated[key] = pluginValidatedPolicy{policyRevision: policy.Revision, pluginRevision: policy.PluginRevision}
 		}
 		tasks = append(tasks, plugins.CollectionTask{Plugin: target, CollectorID: policy.CollectorID, Config: append([]byte(nil), policy.Config...), Timeout: time.Duration(policy.TimeoutMilliseconds) * time.Millisecond})
 		keys = append(keys, key)

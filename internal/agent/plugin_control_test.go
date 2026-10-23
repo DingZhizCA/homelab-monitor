@@ -101,6 +101,22 @@ func TestPluginControlClientDoesNotFollowCredentialRedirects(t *testing.T) {
 	}
 }
 
+func TestPluginControlClientRejectsAmbiguousCollectionPolicies(t *testing.T) {
+	policy := plugins.CollectionPolicy{DeviceID: "node-a", PluginID: "health", CollectorID: "status", Revision: 1, PluginRevision: 1, Enabled: true, IntervalSeconds: 60, TimeoutMilliseconds: 1000, Config: []byte(`{}`)}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"device_id": "node-a", "policies": []plugins.CollectionPolicy{policy, policy}})
+	}))
+	defer server.Close()
+	client, err := NewPluginControlClient(server.URL, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.client = server.Client()
+	if _, err := client.CollectionPolicies(context.Background(), "node-a"); err == nil {
+		t.Fatal("duplicate collection policy was accepted")
+	}
+}
+
 func TestCredentialHTTPClientRejectsRedirects(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
