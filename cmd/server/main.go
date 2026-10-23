@@ -31,6 +31,7 @@ import (
 
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
 	"github.com/DingZhizCA/homelab-monitor/internal/server"
+	"github.com/DingZhizCA/homelab-monitor/internal/storage"
 )
 
 type explicitDurationFlag struct {
@@ -73,6 +74,13 @@ func run() error {
 	checkpointInterval := flag.Duration("storage-checkpoint-interval", 0, "interval between WAL checkpoint inspections")
 	checkpointWALBytes := flag.Int64("storage-checkpoint-wal-bytes", 0, "WAL size that triggers a passive checkpoint")
 	checkpointTimeout := flag.Duration("storage-checkpoint-timeout", 0, "timeout for each passive WAL checkpoint")
+	spaceRecoveryInterval := flag.Duration("storage-space-recovery-interval", 0, "interval between physical SQLite space recovery passes")
+	spaceRecoveryTimeout := flag.Duration("storage-space-recovery-timeout", 0, "timeout per database physical recovery pass")
+	walTruncateBytes := flag.Int64("storage-wal-truncate-bytes", 0, "WAL bytes that trigger a truncating checkpoint")
+	vacuumMinFreePages := flag.Int64("storage-vacuum-min-free-pages", 0, "free pages that trigger incremental vacuum")
+	vacuumMaxPages := flag.Int64("storage-vacuum-max-pages", 0, "maximum pages requested from incremental vacuum per pass")
+	incrementalVacuumMigrate := flag.Bool("storage-incremental-vacuum-migrate", false, "explicitly convert legacy databases with startup VACUUM before serving")
+	incrementalVacuumMigrationTimeout := flag.Duration("storage-incremental-vacuum-migration-timeout", 0, "timeout for explicit legacy incremental-vacuum conversion")
 	retentionInterval := flag.Duration("storage-retention-interval", 0, "interval between bounded metric retention transactions")
 	rawRetention := flag.Duration("storage-raw-retention", 0, "retention window for raw metric snapshots")
 	receiptRetention := flag.Duration("storage-receipt-retention", 0, "retention window for metric batch retry receipts")
@@ -166,6 +174,19 @@ func run() error {
 		}()
 		log.Printf("component=server level=INFO storage=%q msg=%q", *storageDirectory, "SQLite storage initialized")
 	}
+	if *incrementalVacuumMigrate {
+		if databases == nil || *incrementalVacuumMigrationTimeout <= 0 {
+			return errors.New("incremental vacuum migration requires storage and a positive migration timeout")
+		}
+		migrationContext, cancelMigration := context.WithTimeout(context.Background(), *incrementalVacuumMigrationTimeout)
+		migrationErr := storage.EnableIncrementalVacuum(migrationContext, databases, capacityConfig.filesystemMinBytes)
+		cancelMigration()
+		if migrationErr != nil {
+			return migrationErr
+		}
+	} else if *incrementalVacuumMigrationTimeout != 0 {
+		return errors.New("incremental vacuum migration timeout requires the explicit migration flag")
+	}
 	checkpointManager, err := buildCheckpointRuntime(databases, checkpointRuntimeConfig{
 		interval: *checkpointInterval, walThresholdBytes: *checkpointWALBytes, timeout: *checkpointTimeout,
 	})
@@ -175,6 +196,13 @@ func run() error {
 	retentionManager, err := buildRetentionRuntime(databases, retentionRuntimeConfig{
 		interval: *retentionInterval, rawRetention: *rawRetention, receiptRetention: *receiptRetention,
 		deleteLimit: *retentionDeleteLimit, timeout: *retentionTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	spaceRecoveryManager, err := buildSpaceRecoveryRuntime(databases, spaceRecoveryRuntimeConfig{
+		interval: *spaceRecoveryInterval, timeout: *spaceRecoveryTimeout, walTruncateBytes: *walTruncateBytes,
+		vacuumMinFreePages: *vacuumMinFreePages, vacuumMaxPages: *vacuumMaxPages,
 	})
 	if err != nil {
 		return err
@@ -292,6 +320,18 @@ func run() error {
 		defer func() {
 			cancelRetention()
 			<-retentionDone
+		}()
+	}
+	if spaceRecoveryManager != nil {
+		spaceContext, cancelSpace := context.WithCancel(ctx)
+		spaceDone := make(chan struct{})
+		go func() {
+			spaceRecoveryManager.Run(spaceContext)
+			close(spaceDone)
+		}()
+		defer func() {
+			cancelSpace()
+			<-spaceDone
 		}()
 	}
 	if alertEngine != nil {

@@ -1,9 +1,10 @@
 /*
-Package storage owns the Server's SQLite connection and migration foundation.
+Package storage owns the Server's SQLite connection and format foundation.
 
 It keeps control-plane and metric data in separate local files, applies the
-approved WAL durability settings on every pooled connection, and does not
-define retention, quota, or domain business policy.
+approved WAL durability and incremental-vacuum settings on every pooled
+connection, and exposes an explicit legacy format conversion without scheduling
+retention, space recovery, or domain policy.
 */
 package storage
 
@@ -188,6 +189,9 @@ func openSQLite(ctx context.Context, path, synchronous string, maxBytes ...int64
 	query.Set("_foreign_keys", "on")
 	query.Set("_journal_mode", "WAL")
 	query.Set("_synchronous", synchronous)
+	// New databases must reserve pointer-map pages before the first schema table
+	// so bounded incremental vacuum can later return free tail pages to the SSD.
+	query.Set("_auto_vacuum", "incremental")
 	configuredMaxBytes := int64(0)
 	if len(maxBytes) > 0 {
 		configuredMaxBytes = maxBytes[0]
@@ -212,6 +216,51 @@ func openSQLite(ctx context.Context, path, synchronous string, maxBytes ...int64
 		return nil, err
 	}
 	return database, nil
+}
+
+// EnableIncrementalVacuum performs the one-time offline-style conversion needed
+// by databases created before incremental auto-vacuum was configured.
+func EnableIncrementalVacuum(ctx context.Context, databases *Databases, filesystemMinBytes int64) error {
+	if databases == nil || databases.Core == nil || databases.Metrics == nil || filesystemMinBytes < 1 {
+		return errors.New("databases and a positive filesystem reserve are required for incremental vacuum migration")
+	}
+	for _, target := range []struct {
+		name     string
+		database *sql.DB
+		path     string
+	}{{"core", databases.Core, databases.CorePath}, {"metrics", databases.Metrics, databases.MetricsPath}} {
+		var mode int
+		if err := target.database.QueryRowContext(ctx, `PRAGMA auto_vacuum`).Scan(&mode); err != nil {
+			return fmt.Errorf("read %s auto_vacuum mode: %w", target.name, err)
+		}
+		if mode == 2 {
+			continue
+		}
+		if mode != 0 {
+			return fmt.Errorf("%s database has unsupported auto_vacuum mode %d", target.name, mode)
+		}
+		info, err := os.Stat(target.path)
+		if err != nil {
+			return fmt.Errorf("inspect %s database before vacuum migration: %w", target.name, err)
+		}
+		freeBytes, err := filesystemFreeBytes(filepath.Dir(target.path))
+		if err != nil {
+			return fmt.Errorf("measure filesystem before %s vacuum migration: %w", target.name, err)
+		}
+		if info.Size() > freeBytes-filesystemMinBytes {
+			return fmt.Errorf("%s vacuum migration lacks database-sized temporary space above the filesystem reserve", target.name)
+		}
+		if _, err := target.database.ExecContext(ctx, `PRAGMA auto_vacuum=INCREMENTAL`); err != nil {
+			return fmt.Errorf("configure %s incremental vacuum migration: %w", target.name, err)
+		}
+		if _, err := target.database.ExecContext(ctx, `VACUUM`); err != nil {
+			return fmt.Errorf("migrate %s to incremental vacuum: %w", target.name, err)
+		}
+		if err := target.database.QueryRowContext(ctx, `PRAGMA auto_vacuum`).Scan(&mode); err != nil || mode != 2 {
+			return fmt.Errorf("verify %s incremental vacuum migration: mode=%d error=%v", target.name, mode, err)
+		}
+	}
+	return nil
 }
 
 func verifySettings(ctx context.Context, database *sql.DB, synchronous string, maxBytes int64) error {

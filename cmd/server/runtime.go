@@ -56,6 +56,14 @@ type retentionRuntimeConfig struct {
 	timeout          time.Duration
 }
 
+type spaceRecoveryRuntimeConfig struct {
+	interval           time.Duration
+	timeout            time.Duration
+	walTruncateBytes   int64
+	vacuumMinFreePages int64
+	vacuumMaxPages     int64
+}
+
 type capacityRuntimeConfig struct {
 	coreMaxBytes       int64
 	metricsSoftBytes   int64
@@ -69,6 +77,10 @@ func (c capacityRuntimeConfig) disabled() bool {
 
 func (c retentionRuntimeConfig) disabled() bool {
 	return c.interval == 0 && c.rawRetention == 0 && c.receiptRetention == 0 && c.deleteLimit == 0 && c.timeout == 0
+}
+
+func (c spaceRecoveryRuntimeConfig) disabled() bool {
+	return c.interval == 0 && c.timeout == 0 && c.walTruncateBytes == 0 && c.vacuumMinFreePages == 0 && c.vacuumMaxPages == 0
 }
 
 func (c checkpointRuntimeConfig) disabled() bool {
@@ -228,6 +240,30 @@ func logRetentionObservation(observation storage.RetentionObservation) {
 		return
 	}
 	log.Printf("component=storage level=INFO raw_cutoff=%q receipt_cutoff=%q deleted_snapshots=%d deleted_receipts=%d duration=%q msg=%q", observation.RawCutoff, observation.ReceiptCutoff, observation.DeletedSnapshots, observation.DeletedReceipts, observation.Duration, "bounded metric retention completed")
+}
+
+func buildSpaceRecoveryRuntime(databases *storage.Databases, config spaceRecoveryRuntimeConfig) (*storage.SpaceRecoveryManager, error) {
+	if databases == nil {
+		if config.disabled() {
+			return nil, nil
+		}
+		return nil, errors.New("storage-dir and all positive physical space recovery settings are required together")
+	}
+	if config.interval <= 0 || config.timeout <= 0 || config.walTruncateBytes < 1 || config.vacuumMinFreePages < 1 || config.vacuumMaxPages < 1 {
+		return nil, errors.New("storage-dir and all positive physical space recovery settings are required together")
+	}
+	return storage.NewSpaceRecoveryManager(context.Background(), databases, storage.SpaceRecoveryConfig{
+		Interval: config.interval, Timeout: config.timeout, WALTruncateBytes: config.walTruncateBytes,
+		VacuumMinFreePages: config.vacuumMinFreePages, VacuumMaxPagesPerRun: config.vacuumMaxPages,
+	}, logSpaceRecoveryObservation)
+}
+
+func logSpaceRecoveryObservation(observation storage.SpaceRecoveryObservation) {
+	level := "INFO"
+	if observation.Err != nil {
+		level = "ERROR"
+	}
+	log.Printf("component=storage level=%s database=%q allocated_before=%d allocated_after=%d free_pages_before=%d free_pages_after=%d wal_before=%d wal_after=%d vacuum_attempted=%t truncate_attempted=%t busy=%d log_frames=%d checkpointed_frames=%d duration=%q error=%q msg=%q", level, observation.Database, observation.AllocatedBytesBefore, observation.AllocatedBytesAfter, observation.FreePagesBefore, observation.FreePagesAfter, observation.WALBytesBefore, observation.WALBytesAfter, observation.VacuumAttempted, observation.TruncateAttempted, observation.Busy, observation.LogFrames, observation.CheckpointedFrames, observation.Duration, observation.Err, "bounded SQLite physical space recovery completed")
 }
 
 func buildCapacityRuntime(ctx context.Context, databases *storage.Databases, retention *storage.MetricRetentionManager, checkpoint *storage.CheckpointManager, config capacityRuntimeConfig) (*storage.CapacityManager, error) {

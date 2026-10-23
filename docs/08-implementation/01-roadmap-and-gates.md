@@ -33,7 +33,7 @@
 | P1 模块骨架 | 部分完成：Agent/Server 插件控制边界、设备凭据验证、本地用户/Owner/服务端 Session、HTTPS 认证 Handler、Argon2id、Web 登录与账户管理、SQLite 用户/Session/账户、Dashboard、告警规则审计及插件 Desired/Reported 仓储均已有代码与测试；`cmd/server` 可在完整显式配置下装配这些持久化路由，默认保持关闭 | Incident 等其他业务审计仍未持久化；敏感操作再认证、更细粒度 ACL 和完整服务模块拆分未实现 |
 | P2 插件平台 | 部分完成：版本化 gRPC 契约、Unix Socket Host、SDK、签名/校验、权限复验暂存、本机 grant 文件加载、强制包身份/声明权限授权门、可选指标 Schema 版本声明、基于 Host feature 的标签能力协商及 Descriptor 标签值校验、Linux 同 UID 子进程 Supervisor、健康检查恢复及单前序版本回滚、必填策略驱动的连续失败指数退避与 Desired Revision 隔离、回滚/隔离有界私有状态持久化及 Desired 确认后复验恢复、编排、显式批调度及跨并发批次的 Scheduler 级总并发上限、Scheduler outcome 捕获包版本与 Collector Descriptor、Agent 规范化插件观测适配、可取消的有界关闭、可选 Agent 插件配置及控制轮询装配均有测试 | 未提供不同 UID 隔离、实际文件/网络/资源限制；Schema 转换和安全故障注入未完成；不得作为生产隔离使用 |
 | P3 采集通道 | 进行中：插件 Desired/Reported 控制 API、SQLite 原子仓储/审计、Owner 写入、`plugin-pack` 有容量边界的可选原子制品导入、Server 制品总字节/包数/扫描硬边界、Desired 引用保护及有宽限期/超时/删除量限制的周期清理、签名制品下载和 Agent 对账，以及持久化指标批量链均已有测试；Agent 批队列通过私有、有界、带校验和的原子状态文件跨重启保留快照和 pending ID；`cmd/agent` 与 `cmd/server` 两端相关能力都默认关闭并要求完整显式安全与容量参数；路由级测试覆盖 Owner 发布、设备拉取和制品下载 | Server/Agent 目标环境运行链、容量参数及 Agent 状态文件写放大尚未验收；Agent staging 总配额/清理仍未实现；Newifi Remote Host 未完成；网络基线测试未执行 |
-| P4 数据平台 | 进行中：ADR-019 已实现 CGO SQLite 双库、迁移、原子指标批次和原始 Descriptor 历史源；`core.db` 已有用户、Session、账户审计、Dashboard 与告警规则不可变修订历史、Incident 当前状态及插件 Desired/Reported；ADR-020 查询已可显式装配；Server 启动可恢复最新持久化快照；本机子进程强杀测试覆盖非空 WAL 重开、`quick_check`、控制状态和批次幂等恢复；ADR-021 的显式 PASSIVE checkpoint 已接入 Server 生命周期并提供结构化观测；ADR-022 的原始快照/批次凭据双窗口清理、每连接数据库页上限、指标软硬容量状态、文件系统保留空间和 507 背压已接入 | 目标设备运行、断电与存储介质语义、维护及容量参数调优、WAL 截断、聚合和容量验收未完成 |
+| P4 数据平台 | 进行中：ADR-019 已实现 CGO SQLite 双库、迁移、原子指标批次和原始 Descriptor 历史源；`core.db` 已有用户、Session、账户审计、Dashboard 与告警规则不可变修订历史、Incident 当前状态及插件 Desired/Reported；ADR-020 查询已可显式装配；Server 启动可恢复最新持久化快照；本机子进程强杀测试覆盖非空 WAL 重开、`quick_check`、控制状态和批次幂等恢复；ADR-021/022 的 PASSIVE checkpoint、双窗口清理、页上限、软硬容量和 507 背压已接入；ADR-024 的新库 incremental auto-vacuum、旧库显式启动迁移、有阈值/页数/超时边界的 TRUNCATE 与 incremental vacuum 已接入并可观察 | 目标设备运行、断电与存储介质语义、维护及容量参数调优、聚合和容量验收未完成 |
 | P5 流量归属 | 未开始 | 需要确认数据源覆盖、计数域和去重证据后再实现 |
 | P6 Web | 部分完成：已有 React Dashboard、登录态前置门、设备列表/指标卡、SSE、临时跨设备对比、明确授权的磁盘刷新、网络快照、Owner 账户管理，以及 Dashboard 草稿/发布/回滚 UI；持久化认证、当前指标、原始历史查询和 SQLite Dashboard 仓储可由 `cmd/server` 显式装配，Explore 可读取有界历史且不触发采集；共享发布策略拒绝当前 Registry 之外的 Descriptor | 系统模板持久化、敏感发布再认证、更细粒度 Viewer ACL、Network 流量归属/拓扑和 Alerts 页面仍未实现 |
 | P7 告警通知 | 进行中：版本化规则结构、Descriptor/Unit/Label Selector 校验、显式表达式复杂度上限及三值 AND/OR 评估已有测试；SQLite 规则仓储持久化不可变历史、当前 Revision 和原子审计；`cmd/server` 可显式装配 Owner 管理路由及有周期、超时、规则数和状态容量边界的评估运行链；调度以稳定游标有界分页，只读取 Current State，按规则隔离失败，并以 CAS 推进可重开恢复的 Incident | 没有敏感操作再认证；阈值、Unknown/Disabled 策略和时间没有产品默认值；规则删除、旧 Incident 显式迁移、通知去重、静默、站内/Web Push 和投递失败隔离仍未实现 |
@@ -44,7 +44,7 @@
 - 当前可复验检查为根模块 `go test -race ./...`、`go build ./cmd/server ./cmd/agent ./cmd/plugin-pack`、`go vet ./...`、`git diff --check`，独立存储评测模块的单测、race、vet 和构建，以及 `web` 目录下的 `npm test`、`npm run build` 和 `npm run lint`。当前本地 Go 与 Web 检查均通过；这些结果不替代目标设备上的验证。
 - Web lint 已无警告；Vite build 仍提示懒加载的 ECharts chunk 为 511 KB（gzip 173 KB），略高于 500 KB 提示线。构建通过，后续可结合实际加载体验评估图表模块拆分。仪表盘 Widget 已增加手动最新值预览，不触发采集；完整历史图表仍未接入。
 - 不具备目标主机身份、cgroup 委派和 OS 版本的本地证据时，不实现或宣称具备系统级插件沙箱。
-- 后台维护与容量保护必须完整显式配置；当前具备有界 PASSIVE checkpoint、原始指标保留清理、SQLite 页上限及指标写入背压。目标环境故障恢复、维护与容量参数、WAL 截断和容量验收完成前，不将当前本地测试描述为生产验收。
+- 后台维护与容量保护必须完整显式配置；当前具备有界 PASSIVE/TRUNCATE checkpoint、原始指标保留清理、incremental vacuum、SQLite 页上限及指标写入背压。目标环境故障恢复、维护与容量参数、锁等待和容量验收完成前，不将当前本地测试描述为生产验收。
 - P5 的流量归属边界、P7 的告警阈值等仍标为待细化的规则，需按决策台账确认；不得为完成路线图自行虚构业务策略。
 - P8 设备测试及生产部署不在当前本地工作授权范围内。
 

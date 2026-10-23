@@ -34,7 +34,7 @@
 ## 当前仓储接入点
 现有 `internal/server.Handler` 通过 `CurrentStateRepository` 访问当前设备快照与显式刷新任务；插件状态 API 通过独立的 `PluginStateStore` 访问期望/上报状态。当前实现仍是进程内内存存储，接口仅为后续持久化适配器提供替换点，不表示状态已经持久化。
 
-本地人类用户的密码和服务端 Session 逻辑位于 `internal/auth`，HTTP 认证 Handler 位于 `internal/server`，其仓储接口与 Agent Device Token 校验相互独立。SQLite 适配器位于 `internal/storage`。`cmd/server` 只有在显式提供完整 HTTPS Origin、Session、限速、历史预算和存储参数时才注入 AuthHandler；启用后保护人类用户 API，并装配现有内建指标的当前值与历史查询。
+本地人类用户的密码和服务端 Session 逻辑位于 `internal/auth`，HTTP 认证 Handler 位于 `internal/server`，其仓储接口与 Agent Device Token 校验相互独立。SQLite 适配器、PASSIVE/TRUNCATE checkpoint、保留、容量保护和 incremental vacuum 位于 `internal/storage`；这些管理器暴露显式单轮方法和运行循环，但不拥有隐式默认参数或自行创建 goroutine。`cmd/server` 只有在显式提供完整 HTTPS Origin、Session、限速、历史预算和存储维护参数时才注入 AuthHandler；启用后保护人类用户 API，并装配现有内建指标的当前值与历史查询。
 
 `cmd/server` 只负责读取启动参数、构造当前实现并启动 HTTP Server；稳定 API 路径由 `internal/server.NewRouter` 装配。插件控制面在完整显式配置 SQLite、人类与设备认证、私有制品目录、单包/总量容量及有界清理参数时，使用 `storage.PluginRepository` 与 `FileArtifactRepository` 构造 Desired/Reported、制品下载、Owner 管理和制品维护；默认不挂载。业务 Handler 只依赖带 Context 与错误返回的仓储边界，数据库错误不会被静默转换为空 Desired State。Owner 发布与制品维护共享应用层互斥边界，制品仓库自身再以进程内读写锁和跨进程文件锁保护读取、导入和删除。
 

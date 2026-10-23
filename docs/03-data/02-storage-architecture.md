@@ -7,7 +7,7 @@
 ## 已确认存储方案
 首版在 Alienware 本地 SSD 上使用 `mattn/go-sqlite3` 与 SQLite WAL。控制面元数据存入 `core.db`，高频指标存入 `metrics.db`；`core.db` 使用 `synchronous=FULL`，`metrics.db` 使用 `synchronous=NORMAL`。业务模块继续通过 Storage Repository 访问数据，不引入独立时序服务、Redis 或消息队列。SQLite 的单写入事务限制仍需通过真实 schema、批量写入和目标环境实测验证。
 
-两个数据库文件必须位于同一个显式配置的私有目录中。运行时负责校验 WAL、同步模式、外键开关和每个连接的 `wal_autocheckpoint=0`，不静默退回其他模式。启用存储必须显式给出 checkpoint 检查周期、WAL 字节阈值和单次操作超时；任何一项缺失或非正值都拒绝启动。双库之间不提供原子事务；批次身份和对应指标必须同存于 `metrics.db`，需要审计的控制面变更及其审计事件必须同存于 `core.db`。
+两个数据库文件必须位于同一个显式配置的私有目录中。运行时负责校验 WAL、同步模式、外键开关和每个连接的 `wal_autocheckpoint=0`，不静默退回其他模式。新数据库在创建首个表前设置 `auto_vacuum=INCREMENTAL`。启用存储必须显式给出 PASSIVE checkpoint 与物理空间回收各自的周期、阈值、工作上限和单次超时；任何一项缺失或非正值都拒绝启动。双库之间不提供原子事务；批次身份和对应指标必须同存于 `metrics.db`，需要审计的控制面变更及其审计事件必须同存于 `core.db`。
 
 根模块故障测试使用独立子进程提交账户、插件 Desired State/审计和指标批次，在两个 WAL 仍打开且非空时直接终止进程，再通过正式 `storage.Open` 重开并执行 `PRAGMA quick_check`，验证控制状态、当前指标和批次幂等性可恢复。该测试证明当前开发机上的已提交事务可经进程崩溃恢复；它不模拟断电、SSD 缓存行为或目标主机文件系统。
 
@@ -37,7 +37,9 @@ Server 要求显式给出 `core.db` 页分配硬上限、指标逻辑软阈值�
 ## SQL 和后台任务
 使用批处理插入、适量索引、有界查询、分页和点数上限。每个 SQLite 连接同时复核 auto-checkpoint 关闭状态和已配置页数上限。Server 按显式检查周期检查两个 WAL 文件；文件达到显式字节阈值且自上次成功操作后发生变化时，执行有单次超时的 `PRAGMA wal_checkpoint(PASSIVE)`。该模式不等待活跃 Reader/Writer，进程正常退出前也对两库各尝试一次；每次尝试记录数据库、原因、WAL 字节数、busy、日志帧、已 checkpoint 帧、耗时和错误。PASSIVE 只把可用帧同步回主库，不保证截断物理 WAL 文件；阈值基于文件大小，文件保持高水位后，有新写入时会在后续检查周期再次尝试。
 
-删除数据不等同于立即回收 SQLite 文件空间。当前保留任务释放的页由 SQLite 后续复用；WAL 截断和数据库文件空间回收尚未实现。后续策略必须在低负载窗口验证，复杂的全库 VACUUM 不得影响正常 Agent 上报。
+独立物理空间任务按更保守的显式周期检查两库。WAL 达到截断阈值时执行有超时的 `PRAGMA wal_checkpoint(TRUNCATE)`；空闲页达到触发值时执行 `PRAGMA incremental_vacuum(N)`，其中 `N` 是显式单库单轮页数上限，随后尝试 TRUNCATE checkpoint 使变更落入主库。繁忙、锁等待或超时只使当前数据库本轮失败，下一数据库仍单独观测；记录回收前后主库分配字节、空闲页、WAL 字节、动作、帧数、耗时和错误。该任务不删除行，只回收保留任务或业务删除已经释放的页，不周期运行全库 VACUUM。
+
+旧数据库若为 `auto_vacuum=NONE`，物理任务拒绝启动，避免把无效回收写成成功。Owner 可显式开启一次性启动迁移并设置独立超时；Server 在监听 HTTP 前检查文件系统可用空间可覆盖当前库文件和既有保留字节，再顺序执行 `PRAGMA auto_vacuum=INCREMENTAL; VACUUM`。这是可能耗时且需要额外临时空间的格式转换，完成后应移除迁移开关。目标设备仍需验证 TRUNCATE 锁等待、每轮页数、SSD 空间变化和上报延迟。
 
 ## HDD 约束
 监控 DB 和写入工作目录放在系统 SSD，禁止周期性 SMART、磁盘遍历或其他会唤醒休眠 HDD 的任务。需要备份到 HDD 时必须由 Owner 单独审批唤醒策略。

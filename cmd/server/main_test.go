@@ -52,6 +52,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if manager, err := buildRetentionRuntime(nil, retentionRuntimeConfig{}); err != nil || manager != nil {
 		t.Fatalf("disabled retention manager=%v err=%v", manager, err)
 	}
+	if manager, err := buildSpaceRecoveryRuntime(nil, spaceRecoveryRuntimeConfig{}); err != nil || manager != nil {
+		t.Fatalf("disabled space recovery manager=%v err=%v", manager, err)
+	}
 	if manager, err := buildCapacityRuntime(context.Background(), nil, nil, nil, capacityRuntimeConfig{}); err != nil || manager != nil {
 		t.Fatalf("disabled capacity manager=%v err=%v", manager, err)
 	}
@@ -84,6 +87,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	}
 	if manager, err := buildRetentionRuntime(nil, retentionRuntimeConfig{interval: time.Second}); err == nil || manager != nil {
 		t.Fatalf("partial retention manager=%v err=%v", manager, err)
+	}
+	if manager, err := buildSpaceRecoveryRuntime(nil, spaceRecoveryRuntimeConfig{interval: time.Second}); err == nil || manager != nil {
+		t.Fatalf("partial space recovery manager=%v err=%v", manager, err)
 	}
 	if manager, err := buildCapacityRuntime(context.Background(), nil, nil, nil, capacityRuntimeConfig{coreMaxBytes: 1}); err == nil || manager != nil {
 		t.Fatalf("partial capacity manager=%v err=%v", manager, err)

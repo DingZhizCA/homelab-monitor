@@ -108,7 +108,9 @@ collectors:
 
 Server 可通过 `--tls-cert`、`--tls-key` 启用 HTTPS，并通过 `--agent-credentials` 加载逐设备 Token 摘要。未配置 `--agent-credentials` 时，Server 为兼容旧协议不强制 Agent Token 或 HTTPS；该模式不提供 Agent 身份认证。配置格式和迁移边界见[安全说明](docs/04-security/01-authentication-and-trust.md)。
 
-持久化批量指标入口默认关闭。启用时必须同时显式提供 `--storage-dir`、`--metrics-batch-max-snapshots` 和 `--metrics-batch-max-body-bytes`，并配置上述 HTTPS 与逐设备凭据。`--storage-dir` 必须是 Alienware 本地 SSD 上仅 Owner 可访问的目录；程序会在其中创建 `core.db` 和 `metrics.db`。只要启用存储，还必须提供正值的 `--storage-checkpoint-interval`、`--storage-checkpoint-wal-bytes`、`--storage-checkpoint-timeout`、`--storage-retention-interval`、`--storage-raw-retention`、`--storage-receipt-retention`、`--storage-retention-delete-limit`、`--storage-retention-timeout`、`--storage-core-max-bytes`、`--storage-metrics-soft-bytes`、`--storage-metrics-hard-bytes` 和 `--storage-filesystem-min-bytes`；凭据保留窗口必须长于原始指标窗口，指标软阈值必须低于硬阈值。参数不完整时 Server 拒绝启动，不会自行选择维护周期、保留期限、操作预算、容量或批次默认值。
+持久化批量指标入口默认关闭。启用时必须同时显式提供 `--storage-dir`、`--metrics-batch-max-snapshots` 和 `--metrics-batch-max-body-bytes`，并配置上述 HTTPS 与逐设备凭据。`--storage-dir` 必须是 Alienware 本地 SSD 上仅 Owner 可访问的目录；程序会在其中创建 `core.db` 和 `metrics.db`。只要启用存储，还必须提供正值的 `--storage-checkpoint-interval`、`--storage-checkpoint-wal-bytes`、`--storage-checkpoint-timeout`、`--storage-space-recovery-interval`、`--storage-space-recovery-timeout`、`--storage-wal-truncate-bytes`、`--storage-vacuum-min-free-pages`、`--storage-vacuum-max-pages`、`--storage-retention-interval`、`--storage-raw-retention`、`--storage-receipt-retention`、`--storage-retention-delete-limit`、`--storage-retention-timeout`、`--storage-core-max-bytes`、`--storage-metrics-soft-bytes`、`--storage-metrics-hard-bytes` 和 `--storage-filesystem-min-bytes`；凭据保留窗口必须长于原始指标窗口，指标软阈值必须低于硬阈值。参数不完整时 Server 拒绝启动，不会自行选择维护周期、保留期限、操作预算、容量或批次默认值。
+
+新建 SQLite 库使用 incremental auto-vacuum。旧库仍为 `auto_vacuum=NONE` 时，空间回收运行时会拒绝启动；一次性迁移必须由 Owner 显式增加 `--storage-incremental-vacuum-migrate` 和正值 `--storage-incremental-vacuum-migration-timeout`。迁移在 HTTP 监听前顺序转换两库，先检查可用空间能容纳当前数据库大小并保留 `--storage-filesystem-min-bytes`，期间执行全库 `VACUUM`，可能延长启动时间。转换完成后应移除这两个迁移参数；日常运行只执行有页数上限的 incremental vacuum，不周期执行全库 VACUUM。
 
 人类用户认证和指标查询也默认关闭。启用时必须提供 `--storage-dir`、至少一个 `--auth-origin`，以及正值的 `--auth-session-ttl`、`--auth-login-max-keys`、`--auth-login-max-attempts`、`--auth-login-window`、`--history-max-range` 和 `--history-max-points`；同时必须配置 HTTPS。参数不完整时 Server 拒绝启动，不会采用隐式 TTL、限速或历史查询预算。启用后，Owner 与 Viewer 均可读取现有内建当前值和历史指标；账户变更和主动磁盘刷新仍要求 Owner。再提供正值的 `--dashboard-max-body-bytes` 会挂载持久化 Dashboard 路由；共享草稿的创建、保存、发布、回滚和审计在 `core.db` 同一事务提交，未配置时该路由保持关闭。
 
@@ -118,7 +120,7 @@ Agent 插件控制循环默认关闭。启用前必须显式配置插件公钥�
 
 `plugin-pack` 可用可选的 `--repository` 将刚签名且保留在 `--output` 中供审查的 bundle 原子导入 Server 制品仓库；导入时还必须传入与 Server 一致的 `--repository-max-bytes`、`--repository-max-packages` 和 `--repository-max-scan-entries`。重复导入相同字节幂等，冲突字节或容量超限拒绝。导入制品不会自动创建或启用 Desired State，也不会在写入路径自动删除旧包。
 
-Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设备 Token，并显式设置绝对私有的 `state_directory`、队列条数、队列字节数、单批条数与请求体字节上限。队列在每次 Append、首次生成 pending ID 和 Acknowledge 时原子替换带校验和的有界状态文件；重启后恢复未确认快照和同一 pending ID，损坏、身份不符、目录已被另一进程锁定或权限过宽时拒绝启动。失败时保留 pending 批次供后续采样轮次重试，容量满或落盘失败则拒绝新样本；它不会提高采样频率或创建重试线程。Server 按上一段要求显式配置后会挂载持久化批量路由。Server 按采样时间分批删除超过原始窗口的快照，再按接收时间删除已经没有快照且超过更长窗口的批次凭据。每个 SQLite 连接应用显式的 `core.db` 与 `metrics.db` 页数硬上限；新指标写入前检查逻辑占用和文件系统保留空间。达到硬阈值时先执行一次有界清理和 PASSIVE checkpoint，仍不安全则返回 HTTP 507，Agent 保留 pending 批次。分层聚合和物理空间回收仍未实施。
+Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设备 Token，并显式设置绝对私有的 `state_directory`、队列条数、队列字节数、单批条数与请求体字节上限。队列在每次 Append、首次生成 pending ID 和 Acknowledge 时原子替换带校验和的有界状态文件；重启后恢复未确认快照和同一 pending ID，损坏、身份不符、目录已被另一进程锁定或权限过宽时拒绝启动。失败时保留 pending 批次供后续采样轮次重试，容量满或落盘失败则拒绝新样本；它不会提高采样频率或创建重试线程。Server 按上一段要求显式配置后会挂载持久化批量路由。Server 按采样时间分批删除超过原始窗口的快照，再按接收时间删除已经没有快照且超过更长窗口的批次凭据。每个 SQLite 连接应用显式的 `core.db` 与 `metrics.db` 页数硬上限；新指标写入前检查逻辑占用和文件系统保留空间。达到硬阈值时先执行一次有界清理和 PASSIVE checkpoint，仍不安全则返回 HTTP 507，Agent 保留 pending 批次。独立物理维护按 WAL 字节阈值尝试 TRUNCATE checkpoint，并按空闲页触发值执行有单轮页数和超时边界的 incremental vacuum；繁忙或超时只记录本轮失败，不删除未过期数据。
 
 ## API
 
@@ -217,5 +219,5 @@ web/                  React Dashboard
 - 告警规则的不可变历史、回滚和审计可持久化装配；有界评估调度可从 Server 当前快照推进带容量和时间戳 CAS 的 SQLite Incident 状态。规则删除和跨 Revision Incident 迁移、通知去重、静默和投递仍未实现。
 - 插件 Desired/Reported State、审计和制品路由可由 `cmd/server` 显式装配；Agent 可在有界私有状态中跨重启恢复回滚关联和同 Revision 隔离。Server 制品仓库有显式总字节、包数量和扫描边界，并按 Desired 引用与宽限期执行有界清理；参数仍需在目标设备调优。
 - Agent 的有界批量队列与插件控制均默认关闭，启用插件仍需本机信任根、权限 grant、私有状态目录及全部容量和运行参数有效。
-- 原始指标已有 SQLite 持久化、显式 PASSIVE WAL checkpoint、有界时间保留清理及软硬容量保护；PASSIVE 不负责截断 WAL 文件。容量参数尚未在目标设备调优，分层聚合、空间回收、流量归属账本和完整 Incident/通知流程尚未实现。
+- 原始指标已有 SQLite 持久化、显式 PASSIVE checkpoint、有界时间保留、软硬容量保护，以及独立的 WAL 截断和 incremental vacuum 物理回收。维护参数尚未在目标设备调优，分层聚合、流量归属账本和完整 Incident/通知流程尚未实现。
 - 插件进程当前为同 UID 子进程，缺少系统级 CPU、内存、文件和网络隔离，不能视为生产安全沙箱。
