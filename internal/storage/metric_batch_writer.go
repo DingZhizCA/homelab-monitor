@@ -61,6 +61,46 @@ var metricMigrations = []Migration{
 	CREATE INDEX metric_batches_retention
 		ON metric_batches (received_at, batch_id);`,
 	},
+	{
+		Version: 4,
+		Name:    "metric_aggregation",
+		SQL: `CREATE TABLE metric_aggregation_control (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+	);
+	INSERT INTO metric_aggregation_control (id, enabled) VALUES (1, 0);
+	CREATE TABLE metric_aggregation_pending (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		batch_id TEXT NOT NULL,
+		sequence INTEGER NOT NULL,
+		UNIQUE (batch_id, sequence),
+		FOREIGN KEY (batch_id, sequence) REFERENCES metric_snapshots(batch_id, sequence) ON DELETE RESTRICT
+	);
+	CREATE TRIGGER metric_snapshots_enqueue_aggregation
+	AFTER INSERT ON metric_snapshots WHEN (SELECT enabled FROM metric_aggregation_control WHERE id = 1) = 1
+	BEGIN
+		INSERT INTO metric_aggregation_pending (batch_id, sequence) VALUES (NEW.batch_id, NEW.sequence);
+	END;
+	CREATE TABLE metric_aggregates (
+		resolution_seconds INTEGER NOT NULL CHECK (resolution_seconds IN (60, 3600, 86400)),
+		bucket_start TEXT NOT NULL,
+		device_id TEXT NOT NULL,
+		descriptor_id TEXT NOT NULL,
+		dimensions_json TEXT NOT NULL,
+		sample_count INTEGER NOT NULL CHECK (sample_count > 0),
+		value_count INTEGER NOT NULL CHECK (value_count >= 0 AND value_count <= sample_count),
+		value_sum REAL NOT NULL,
+		value_min REAL,
+		value_max REAL,
+		last_value REAL,
+		last_sampled_at TEXT NOT NULL,
+		PRIMARY KEY (resolution_seconds, bucket_start, device_id, descriptor_id, dimensions_json)
+	);
+	CREATE INDEX metric_aggregates_query
+		ON metric_aggregates (device_id, descriptor_id, resolution_seconds, bucket_start);
+	CREATE INDEX metric_aggregates_retention
+		ON metric_aggregates (resolution_seconds, bucket_start);`,
+	},
 }
 
 // MetricBatchWriter atomically persists and deduplicates bounded metric batches.

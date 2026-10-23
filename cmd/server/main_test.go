@@ -52,6 +52,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if manager, err := buildRetentionRuntime(nil, retentionRuntimeConfig{}); err != nil || manager != nil {
 		t.Fatalf("disabled retention manager=%v err=%v", manager, err)
 	}
+	if manager, err := buildAggregationRuntime(nil, aggregationRuntimeConfig{}); err != nil || manager != nil {
+		t.Fatalf("disabled aggregation manager=%v err=%v", manager, err)
+	}
 	if manager, err := buildSpaceRecoveryRuntime(nil, spaceRecoveryRuntimeConfig{}); err != nil || manager != nil {
 		t.Fatalf("disabled space recovery manager=%v err=%v", manager, err)
 	}
@@ -87,6 +90,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	}
 	if manager, err := buildRetentionRuntime(nil, retentionRuntimeConfig{interval: time.Second}); err == nil || manager != nil {
 		t.Fatalf("partial retention manager=%v err=%v", manager, err)
+	}
+	if manager, err := buildAggregationRuntime(nil, aggregationRuntimeConfig{interval: time.Second}); err == nil || manager != nil {
+		t.Fatalf("partial aggregation manager=%v err=%v", manager, err)
 	}
 	if manager, err := buildSpaceRecoveryRuntime(nil, spaceRecoveryRuntimeConfig{interval: time.Second}); err == nil || manager != nil {
 		t.Fatalf("partial space recovery manager=%v err=%v", manager, err)
@@ -128,6 +134,24 @@ func TestBuildRetentionRuntimeRequiresCompletePolicyForStorage(t *testing.T) {
 	})
 	if err != nil || manager == nil {
 		t.Fatalf("retention manager=%v err=%v", manager, err)
+	}
+}
+
+func TestBuildAggregationRuntimeRequiresCompletePolicyForStorage(t *testing.T) {
+	databases, err := openServerStorage(context.Background(), filepath.Join(testutil.TempDir(t), "storage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = databases.Close() })
+	if manager, err := buildAggregationRuntime(databases, aggregationRuntimeConfig{}); err == nil || manager != nil {
+		t.Fatalf("implicit aggregation manager=%v err=%v", manager, err)
+	}
+	manager, err := buildAggregationRuntime(databases, aggregationRuntimeConfig{
+		interval: time.Minute, maxSnapshots: 100, timeout: time.Second,
+		minuteRetention: 2 * time.Hour, hourRetention: 48 * time.Hour, dayRetention: 30 * 24 * time.Hour,
+	})
+	if err != nil || manager == nil {
+		t.Fatalf("aggregation manager=%v err=%v", manager, err)
 	}
 }
 

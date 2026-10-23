@@ -54,6 +54,22 @@ type retentionRuntimeConfig struct {
 	receiptRetention time.Duration
 	deleteLimit      int
 	timeout          time.Duration
+	minuteRetention  time.Duration
+	hourRetention    time.Duration
+	dayRetention     time.Duration
+}
+
+type aggregationRuntimeConfig struct {
+	interval        time.Duration
+	maxSnapshots    int
+	timeout         time.Duration
+	minuteRetention time.Duration
+	hourRetention   time.Duration
+	dayRetention    time.Duration
+}
+
+func (c aggregationRuntimeConfig) disabled() bool {
+	return c.interval == 0 && c.maxSnapshots == 0 && c.timeout == 0 && c.minuteRetention == 0 && c.hourRetention == 0 && c.dayRetention == 0
 }
 
 type spaceRecoveryRuntimeConfig struct {
@@ -76,7 +92,7 @@ func (c capacityRuntimeConfig) disabled() bool {
 }
 
 func (c retentionRuntimeConfig) disabled() bool {
-	return c.interval == 0 && c.rawRetention == 0 && c.receiptRetention == 0 && c.deleteLimit == 0 && c.timeout == 0
+	return c.interval == 0 && c.rawRetention == 0 && c.receiptRetention == 0 && c.deleteLimit == 0 && c.timeout == 0 && c.minuteRetention == 0 && c.hourRetention == 0 && c.dayRetention == 0
 }
 
 func (c spaceRecoveryRuntimeConfig) disabled() bool {
@@ -99,10 +115,11 @@ type authRuntimeConfig struct {
 	loginWindow      time.Duration
 	historyMaxRange  time.Duration
 	historyMaxPoints int
+	historyTiers     *storage.HistoryTierPolicy
 }
 
 func (c authRuntimeConfig) disabled() bool {
-	return len(c.origins) == 0 && c.sessionTTL == 0 && c.loginMaxKeys == 0 && c.loginMaxAttempts == 0 && c.loginWindow == 0 && c.historyMaxRange == 0 && c.historyMaxPoints == 0
+	return len(c.origins) == 0 && c.sessionTTL == 0 && c.loginMaxKeys == 0 && c.loginMaxAttempts == 0 && c.loginWindow == 0 && c.historyMaxRange == 0 && c.historyMaxPoints == 0 && c.historyTiers == nil
 }
 
 type authRuntime struct {
@@ -230,6 +247,7 @@ func buildRetentionRuntime(databases *storage.Databases, config retentionRuntime
 	}
 	return storage.NewMetricRetentionManager(databases.Metrics, storage.RetentionConfig{
 		Interval: config.interval, RawRetention: config.rawRetention, ReceiptRetention: config.receiptRetention,
+		MinuteRetention: config.minuteRetention, HourRetention: config.hourRetention, DayRetention: config.dayRetention,
 		DeleteLimit: config.deleteLimit, Timeout: config.timeout,
 	}, logRetentionObservation)
 }
@@ -239,7 +257,30 @@ func logRetentionObservation(observation storage.RetentionObservation) {
 		log.Printf("component=storage level=ERROR raw_cutoff=%q receipt_cutoff=%q duration=%q msg=%q", observation.RawCutoff, observation.ReceiptCutoff, observation.Duration, observation.Err)
 		return
 	}
-	log.Printf("component=storage level=INFO raw_cutoff=%q receipt_cutoff=%q deleted_snapshots=%d deleted_receipts=%d duration=%q msg=%q", observation.RawCutoff, observation.ReceiptCutoff, observation.DeletedSnapshots, observation.DeletedReceipts, observation.Duration, "bounded metric retention completed")
+	log.Printf("component=storage level=INFO raw_cutoff=%q receipt_cutoff=%q deleted_snapshots=%d deleted_receipts=%d deleted_minute=%d deleted_hour=%d deleted_day=%d duration=%q msg=%q", observation.RawCutoff, observation.ReceiptCutoff, observation.DeletedSnapshots, observation.DeletedReceipts, observation.DeletedMinute, observation.DeletedHour, observation.DeletedDay, observation.Duration, "bounded metric retention completed")
+}
+
+func buildAggregationRuntime(databases *storage.Databases, config aggregationRuntimeConfig) (*storage.MetricAggregationManager, error) {
+	if databases == nil {
+		if config.disabled() {
+			return nil, nil
+		}
+		return nil, errors.New("storage-dir and all positive aggregation settings are required together")
+	}
+	if config.interval <= 0 || config.maxSnapshots < 1 || config.timeout <= 0 || config.minuteRetention <= 0 || config.hourRetention <= config.minuteRetention || config.dayRetention <= config.hourRetention {
+		return nil, errors.New("storage-dir, positive aggregation bounds, and increasing minute, hour, and day retention windows are required together")
+	}
+	return storage.NewMetricAggregationManager(databases.Metrics, dashboard.NewMetricRegistry(), storage.AggregationConfig{
+		Interval: config.interval, MaxSnapshots: config.maxSnapshots, Timeout: config.timeout,
+	}, logAggregationObservation)
+}
+
+func logAggregationObservation(observation storage.AggregationObservation) {
+	level := "INFO"
+	if observation.Err != nil {
+		level = "ERROR"
+	}
+	log.Printf("component=storage level=%s processed_snapshots=%d updated_buckets=%d pending_snapshots=%d duration=%q error=%q msg=%q", level, observation.ProcessedSnapshots, observation.UpdatedBuckets, observation.PendingSnapshots, observation.Duration, observation.Err, "bounded metric aggregation completed")
 }
 
 func buildSpaceRecoveryRuntime(databases *storage.Databases, config spaceRecoveryRuntimeConfig) (*storage.SpaceRecoveryManager, error) {
@@ -372,7 +413,12 @@ func buildAuthRuntime(databases *storage.Databases, current dashboard.SnapshotSo
 	if err != nil {
 		return nil, err
 	}
-	historySource, err := storage.NewMetricHistorySource(databases.Metrics, registry)
+	var historySource dashboard.HistorySource
+	if config.historyTiers == nil {
+		historySource, err = storage.NewMetricHistorySource(databases.Metrics, registry)
+	} else {
+		historySource, err = storage.NewTieredMetricHistorySource(databases.Metrics, registry, *config.historyTiers)
+	}
 	if err != nil {
 		return nil, err
 	}

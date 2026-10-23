@@ -1,7 +1,7 @@
 /*
-Package storage applies explicitly configured, bounded retention to raw metric
-snapshots and their retry receipts. It does not choose product retention values
-or perform aggregation, checkpointing, or file compaction.
+Package storage applies explicitly configured, bounded retention to raw and
+aggregated metric history plus retry receipts. It does not choose product
+retention values or perform aggregation, checkpointing, or file compaction.
 */
 package storage
 
@@ -19,6 +19,9 @@ type RetentionConfig struct {
 	Interval         time.Duration
 	RawRetention     time.Duration
 	ReceiptRetention time.Duration
+	MinuteRetention  time.Duration
+	HourRetention    time.Duration
+	DayRetention     time.Duration
 	DeleteLimit      int
 	Timeout          time.Duration
 }
@@ -29,6 +32,9 @@ type RetentionObservation struct {
 	ReceiptCutoff    time.Time
 	DeletedSnapshots int64
 	DeletedReceipts  int64
+	DeletedMinute    int64
+	DeletedHour      int64
+	DeletedDay       int64
 	Duration         time.Duration
 	Err              error
 }
@@ -52,6 +58,9 @@ func NewMetricRetentionManager(database *sql.DB, config RetentionConfig, observe
 	}
 	if config.Interval <= 0 || config.RawRetention <= 0 || config.ReceiptRetention <= config.RawRetention || config.DeleteLimit < 1 || config.Timeout <= 0 {
 		return nil, errors.New("positive retention settings, a receipt window longer than the raw window, and a positive delete limit are required")
+	}
+	if !validAggregateRetention(config) {
+		return nil, errors.New("aggregate retention windows must all be disabled or increase from raw through day")
 	}
 	return &MetricRetentionManager{database: database, config: config, observe: observer, now: time.Now}, nil
 }
@@ -89,8 +98,12 @@ func (m *MetricRetentionManager) Cleanup(ctx context.Context) RetentionObservati
 	defer transaction.Rollback()
 	result, err := transaction.ExecContext(operationContext, `DELETE FROM metric_snapshots
 		WHERE rowid IN (
-			SELECT rowid FROM metric_snapshots
-			WHERE sampled_at < ?
+			SELECT snapshots.rowid FROM metric_snapshots AS snapshots
+			WHERE snapshots.sampled_at < ?
+				AND NOT EXISTS (
+					SELECT 1 FROM metric_aggregation_pending AS pending
+					WHERE pending.batch_id = snapshots.batch_id AND pending.sequence = snapshots.sequence
+				)
 			ORDER BY sampled_at, batch_id, sequence
 			LIMIT ?
 		)`, storageTimestamp(observation.RawCutoff), m.config.DeleteLimit)
@@ -102,6 +115,29 @@ func (m *MetricRetentionManager) Cleanup(ctx context.Context) RetentionObservati
 	if err != nil {
 		observation.Err = fmt.Errorf("count deleted metric snapshots: %w", err)
 		return m.finish(started, observation)
+	}
+	if configHasAggregateRetention(m.config) {
+		for _, tier := range []struct {
+			resolution int
+			retention  time.Duration
+			deleted    *int64
+		}{{minuteResolution, m.config.MinuteRetention, &observation.DeletedMinute}, {hourResolution, m.config.HourRetention, &observation.DeletedHour}, {dayResolution, m.config.DayRetention, &observation.DeletedDay}} {
+			result, err = transaction.ExecContext(operationContext, `DELETE FROM metric_aggregates WHERE rowid IN (
+				SELECT rowid FROM metric_aggregates
+				WHERE resolution_seconds = ? AND bucket_start < ?
+				ORDER BY bucket_start, device_id, descriptor_id, dimensions_json
+				LIMIT ?
+			)`, tier.resolution, storageTimestamp(now.Add(-tier.retention)), m.config.DeleteLimit)
+			if err != nil {
+				observation.Err = fmt.Errorf("delete expired %d-second metric aggregates: %w", tier.resolution, err)
+				return m.finish(started, observation)
+			}
+			*tier.deleted, err = result.RowsAffected()
+			if err != nil {
+				observation.Err = fmt.Errorf("count deleted %d-second metric aggregates: %w", tier.resolution, err)
+				return m.finish(started, observation)
+			}
+		}
 	}
 	result, err = transaction.ExecContext(operationContext, `DELETE FROM metric_batches
 		WHERE batch_id IN (
@@ -126,9 +162,23 @@ func (m *MetricRetentionManager) Cleanup(ctx context.Context) RetentionObservati
 	if err := transaction.Commit(); err != nil {
 		observation.DeletedSnapshots = 0
 		observation.DeletedReceipts = 0
+		observation.DeletedMinute = 0
+		observation.DeletedHour = 0
+		observation.DeletedDay = 0
 		observation.Err = fmt.Errorf("commit metric retention: %w", err)
 	}
 	return m.finish(started, observation)
+}
+
+func configHasAggregateRetention(config RetentionConfig) bool {
+	return config.MinuteRetention != 0 || config.HourRetention != 0 || config.DayRetention != 0
+}
+
+func validAggregateRetention(config RetentionConfig) bool {
+	if !configHasAggregateRetention(config) {
+		return config.MinuteRetention == 0 && config.HourRetention == 0 && config.DayRetention == 0
+	}
+	return config.MinuteRetention > config.RawRetention && config.HourRetention > config.MinuteRetention && config.DayRetention > config.HourRetention
 }
 
 func (m *MetricRetentionManager) finish(started time.Time, observation RetentionObservation) RetentionObservation {

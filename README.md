@@ -110,6 +110,8 @@ Server 可通过 `--tls-cert`、`--tls-key` 启用 HTTPS，并通过 `--agent-cr
 
 持久化批量指标入口默认关闭。启用时必须同时显式提供 `--storage-dir`、`--metrics-batch-max-snapshots` 和 `--metrics-batch-max-body-bytes`，并配置上述 HTTPS 与逐设备凭据。`--storage-dir` 必须是 Alienware 本地 SSD 上仅 Owner 可访问的目录；程序会在其中创建 `core.db` 和 `metrics.db`。只要启用存储，还必须提供正值的 `--storage-checkpoint-interval`、`--storage-checkpoint-wal-bytes`、`--storage-checkpoint-timeout`、`--storage-space-recovery-interval`、`--storage-space-recovery-timeout`、`--storage-wal-truncate-bytes`、`--storage-vacuum-min-free-pages`、`--storage-vacuum-max-pages`、`--storage-retention-interval`、`--storage-raw-retention`、`--storage-receipt-retention`、`--storage-retention-delete-limit`、`--storage-retention-timeout`、`--storage-core-max-bytes`、`--storage-metrics-soft-bytes`、`--storage-metrics-hard-bytes` 和 `--storage-filesystem-min-bytes`；凭据保留窗口必须长于原始指标窗口，指标软阈值必须低于硬阈值。参数不完整时 Server 拒绝启动，不会自行选择维护周期、保留期限、操作预算、容量或批次默认值。
 
+持久化存储默认整体关闭；一旦配置 `--storage-dir`，分钟、小时和日聚合属于完整存储运行时的必填部分。必须同时提供正值的 `--storage-aggregation-interval`、`--storage-aggregation-max-snapshots`、`--storage-aggregation-timeout`、`--storage-minute-retention`、`--storage-hour-retention` 和 `--storage-day-retention`，并完整启用上述保留任务；四层窗口必须满足原始 < 分钟 < 小时 < 日。聚合任务将现有内建 Descriptor 写入 UTC 时间桶，原始清理会跳过未完成聚合的快照。启用人类历史查询时，同一窗口配置用于从日、小时、分钟和原始层拼接结果；聚合点为桶内有效值均值并标记 `estimated`。
+
 新建 SQLite 库使用 incremental auto-vacuum。旧库仍为 `auto_vacuum=NONE` 时，空间回收运行时会拒绝启动；一次性迁移必须由 Owner 显式增加 `--storage-incremental-vacuum-migrate` 和正值 `--storage-incremental-vacuum-migration-timeout`。迁移在 HTTP 监听前顺序转换两库，先检查可用空间能容纳当前数据库大小并保留 `--storage-filesystem-min-bytes`，期间执行全库 `VACUUM`，可能延长启动时间。转换完成后应移除这两个迁移参数；日常运行只执行有页数上限的 incremental vacuum，不周期执行全库 VACUUM。
 
 人类用户认证和指标查询也默认关闭。启用时必须提供 `--storage-dir`、至少一个 `--auth-origin`，以及正值的 `--auth-session-ttl`、`--auth-login-max-keys`、`--auth-login-max-attempts`、`--auth-login-window`、`--history-max-range` 和 `--history-max-points`；同时必须配置 HTTPS。参数不完整时 Server 拒绝启动，不会采用隐式 TTL、限速或历史查询预算。启用后，Owner 与 Viewer 均可读取现有内建当前值和历史指标；账户变更和主动磁盘刷新仍要求 Owner。再提供正值的 `--dashboard-max-body-bytes` 会挂载持久化 Dashboard 路由；共享草稿的创建、保存、发布、回滚和审计在 `core.db` 同一事务提交，未配置时该路由保持关闭。
@@ -215,9 +217,9 @@ web/                  React Dashboard
 ## 当前限制
 
 - 兼容单快照接口只更新内存；只有持久化批量接口写入的设备快照会在 Server 重启时恢复。刷新任务仍为进程内状态，不会恢复。
-- 持久化认证、Owner 管理、内建当前指标、原始历史查询和 Dashboard 管理必须通过完整显式参数启用；默认运行保持这些路由关闭。共享发布只允许引用当前内建 Descriptor，更细粒度设备/字段 ACL 和敏感操作再认证尚未实现。
+- 持久化认证、Owner 管理、内建当前指标、分层历史查询和 Dashboard 管理必须通过完整显式参数启用；默认运行保持这些路由关闭。`cmd/server` 的持久化历史按配置窗口读取日、小时、分钟和原始层；底层原始历史适配器继续保留给兼容调用与测试。共享发布只允许引用当前内建 Descriptor，更细粒度设备/字段 ACL 和敏感操作再认证尚未实现。
 - 告警规则的不可变历史、回滚和审计可持久化装配；有界评估调度可从 Server 当前快照推进带容量和时间戳 CAS 的 SQLite Incident 状态。规则删除和跨 Revision Incident 迁移、通知去重、静默和投递仍未实现。
 - 插件 Desired/Reported State、审计和制品路由可由 `cmd/server` 显式装配；Agent 可在有界私有状态中跨重启恢复回滚关联和同 Revision 隔离。Server 制品仓库有显式总字节、包数量和扫描边界，并按 Desired 引用与宽限期执行有界清理；参数仍需在目标设备调优。
 - Agent 的有界批量队列与插件控制均默认关闭，启用插件仍需本机信任根、权限 grant、私有状态目录及全部容量和运行参数有效。
-- 原始指标已有 SQLite 持久化、显式 PASSIVE checkpoint、有界时间保留、软硬容量保护，以及独立的 WAL 截断和 incremental vacuum 物理回收。维护参数尚未在目标设备调优，分层聚合、流量归属账本和完整 Incident/通知流程尚未实现。
+- 指标已有 SQLite 原始持久化、事务型分钟/小时/日聚合队列、分层查询与保留、显式 PASSIVE checkpoint、软硬容量保护，以及独立的 WAL 截断和 incremental vacuum 物理回收。维护及聚合参数尚未在目标设备调优，插件规范化指标尚未接入聚合表；流量归属账本和完整 Incident/通知流程仍未实现。
 - 插件进程当前为同 UID 子进程，缺少系统级 CPU、内存、文件和网络隔离，不能视为生产安全沙箱。

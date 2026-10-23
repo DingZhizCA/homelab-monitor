@@ -41,7 +41,7 @@ func TestOpenCreatesIsolatedDatabasesWithApprovedSettings(t *testing.T) {
 	for name, fixture := range map[string]struct {
 		database *sql.DB
 		want     int
-	}{"core": {databases.Core, 5}, "metrics": {databases.Metrics, 3}} {
+	}{"core": {databases.Core, 5}, "metrics": {databases.Metrics, 4}} {
 		var count int
 		if err := fixture.database.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 			t.Fatalf("%s migration ledger: %v", name, err)

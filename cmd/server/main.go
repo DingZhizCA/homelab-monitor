@@ -86,6 +86,12 @@ func run() error {
 	receiptRetention := flag.Duration("storage-receipt-retention", 0, "retention window for metric batch retry receipts")
 	retentionDeleteLimit := flag.Int("storage-retention-delete-limit", 0, "maximum snapshots and receipts deleted per retention transaction")
 	retentionTimeout := flag.Duration("storage-retention-timeout", 0, "timeout for each metric retention transaction")
+	aggregationInterval := flag.Duration("storage-aggregation-interval", 0, "interval between bounded metric aggregation transactions")
+	aggregationMaxSnapshots := flag.Int("storage-aggregation-max-snapshots", 0, "maximum raw snapshots aggregated per transaction")
+	aggregationTimeout := flag.Duration("storage-aggregation-timeout", 0, "timeout for each metric aggregation transaction")
+	minuteRetention := flag.Duration("storage-minute-retention", 0, "retention and query window for minute metric aggregates")
+	hourRetention := flag.Duration("storage-hour-retention", 0, "retention and query window for hour metric aggregates")
+	dayRetention := flag.Duration("storage-day-retention", 0, "retention and query window for day metric aggregates")
 	coreMaxBytes := flag.Int64("storage-core-max-bytes", 0, "hard maximum bytes allocated to core.db pages")
 	metricsSoftBytes := flag.Int64("storage-metrics-soft-bytes", 0, "logical metric bytes that enter soft capacity state")
 	metricsHardBytes := flag.Int64("storage-metrics-hard-bytes", 0, "hard maximum bytes allocated to metrics.db pages")
@@ -143,6 +149,15 @@ func run() error {
 		loginMaxKeys: *authLoginMaxKeys, loginMaxAttempts: *authLoginMaxAttempts, loginWindow: *authLoginWindow,
 		historyMaxRange: *historyMaxRange, historyMaxPoints: *historyMaxPoints,
 	}
+	aggregationConfig := aggregationRuntimeConfig{
+		interval: *aggregationInterval, maxSnapshots: *aggregationMaxSnapshots, timeout: *aggregationTimeout,
+		minuteRetention: *minuteRetention, hourRetention: *hourRetention, dayRetention: *dayRetention,
+	}
+	if !aggregationConfig.disabled() && !authConfig.disabled() {
+		authConfig.historyTiers = &storage.HistoryTierPolicy{
+			RawWindow: *rawRetention, MinuteWindow: *minuteRetention, HourWindow: *hourRetention, DayWindow: *dayRetention,
+		}
+	}
 	if !authConfig.disabled() && *tlsCert == "" {
 		return errors.New("human authentication requires configured HTTPS")
 	}
@@ -196,9 +211,17 @@ func run() error {
 	retentionManager, err := buildRetentionRuntime(databases, retentionRuntimeConfig{
 		interval: *retentionInterval, rawRetention: *rawRetention, receiptRetention: *receiptRetention,
 		deleteLimit: *retentionDeleteLimit, timeout: *retentionTimeout,
+		minuteRetention: *minuteRetention, hourRetention: *hourRetention, dayRetention: *dayRetention,
 	})
 	if err != nil {
 		return err
+	}
+	aggregationManager, err := buildAggregationRuntime(databases, aggregationConfig)
+	if err != nil {
+		return err
+	}
+	if aggregationManager != nil && retentionManager == nil {
+		return errors.New("metric aggregation requires configured metric retention")
 	}
 	spaceRecoveryManager, err := buildSpaceRecoveryRuntime(databases, spaceRecoveryRuntimeConfig{
 		interval: *spaceRecoveryInterval, timeout: *spaceRecoveryTimeout, walTruncateBytes: *walTruncateBytes,
@@ -320,6 +343,18 @@ func run() error {
 		defer func() {
 			cancelRetention()
 			<-retentionDone
+		}()
+	}
+	if aggregationManager != nil {
+		aggregationContext, cancelAggregation := context.WithCancel(ctx)
+		aggregationDone := make(chan struct{})
+		go func() {
+			aggregationManager.Run(aggregationContext)
+			close(aggregationDone)
+		}()
+		defer func() {
+			cancelAggregation()
+			<-aggregationDone
 		}()
 	}
 	if spaceRecoveryManager != nil {
