@@ -13,19 +13,20 @@ import (
 
 // RouterOptions contains already-constructed application handlers for routing.
 type RouterOptions struct {
-	API                *Handler
-	PluginControl      *PluginControlHandler
-	PluginArtifacts    *PluginArtifactHandler
-	PluginAdmin        *PluginAdminHandler
-	CollectionPolicies *PluginCollectionPolicyHandler
-	Auth               *AuthHandler
-	Dashboards         *DashboardHandler
-	MetricQueries      *MetricQueryHandler
-	MetricHistory      *MetricHistoryHandler
-	MetricsBatch       *MetricsBatchHandler
-	PluginMetricsBatch *PluginMetricsBatchHandler
-	AlertRules         *AlertRuleHandler
-	WebDirectory       string
+	API                 *Handler
+	PluginControl       *PluginControlHandler
+	PluginArtifacts     *PluginArtifactHandler
+	PluginAdmin         *PluginAdminHandler
+	CollectionPolicies  *PluginCollectionPolicyHandler
+	Auth                *AuthHandler
+	Dashboards          *DashboardHandler
+	MetricQueries       *MetricQueryHandler
+	MetricHistory       *MetricHistoryHandler
+	PluginMetricHistory *PluginMetricHistoryHandler
+	MetricsBatch        *MetricsBatchHandler
+	PluginMetricsBatch  *PluginMetricsBatchHandler
+	AlertRules          *AlertRuleHandler
+	WebDirectory        string
 }
 
 // NewRouter registers the stable HTTP API and an optional Dashboard handler.
@@ -47,6 +48,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.MetricHistory != nil && (options.Auth == nil || options.MetricHistory.auth != options.Auth) {
 		return nil, errors.New("metric history routes require the matching human authentication handler")
+	}
+	if options.PluginMetricHistory != nil && (options.Auth == nil || options.PluginMetricHistory.auth != options.Auth) {
+		return nil, errors.New("plugin metric history routes require the matching human authentication handler")
 	}
 	if options.MetricsBatch != nil && (options.MetricsBatch.api != options.API || options.API.devices == nil) {
 		return nil, errors.New("metric batch route requires the matching device-authenticated Agent API")
@@ -108,6 +112,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.MetricHistory != nil {
 		mux.HandleFunc("/api/v1/dashboard/metrics/history", options.MetricHistory.History)
+	}
+	if options.PluginMetricHistory != nil {
+		mux.HandleFunc("/api/v1/dashboard/plugin-metrics/history", options.PluginMetricHistory.History)
 	}
 	if options.AlertRules != nil {
 		mux.Handle("/api/v1/owner/alert-rules", options.Auth.RequireOwner(http.HandlerFunc(options.AlertRules.Collection)))

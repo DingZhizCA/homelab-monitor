@@ -131,6 +131,12 @@ var metricMigrations = []Migration{
 	CREATE INDEX plugin_metric_batches_retention
 		ON plugin_metric_batches (received_at, batch_id);`,
 	},
+	{
+		Version: 6,
+		Name:    "plugin_metric_history_index",
+		SQL: `CREATE INDEX plugin_metric_observations_history
+		ON plugin_metric_observations (device_id, plugin_id, plugin_version, collector_id, observed_at, batch_id, sequence);`,
+	},
 }
 
 // MetricBatchWriter atomically persists and deduplicates bounded metric batches.

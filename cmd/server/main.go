@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
+	"github.com/DingZhizCA/homelab-monitor/internal/pluginmetrics"
 	"github.com/DingZhizCA/homelab-monitor/internal/server"
 	"github.com/DingZhizCA/homelab-monitor/internal/storage"
 )
@@ -109,6 +110,7 @@ func run() error {
 	authLoginWindow := flag.Duration("auth-login-window", 0, "login limiter fixed-window duration")
 	historyMaxRange := flag.Duration("history-max-range", 0, "maximum time range for one historical metric query")
 	historyMaxPoints := flag.Int("history-max-points", 0, "maximum observations returned by one historical metric query")
+	pluginHistoryMaxScanned := flag.Int("plugin-history-max-observations-scanned", 0, "maximum raw plugin observations scanned by one history query")
 	dashboardMaxBodyBytes := flag.Int64("dashboard-max-body-bytes", 0, "maximum Dashboard mutation request body bytes")
 	alertRuleMaxBodyBytes := flag.Int64("alert-rule-max-body-bytes", 0, "maximum alert-rule mutation request body bytes")
 	alertRuleMaxDepth := flag.Int("alert-rule-max-depth", 0, "maximum alert-rule expression depth")
@@ -266,6 +268,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	pluginMetricHistory, err := buildPluginMetricHistoryRuntime(databases, humanAuth, *pluginHistoryMaxScanned, pluginmetrics.HistoryBudget{MaxRange: *historyMaxRange, MaxPoints: *historyMaxPoints})
+	if err != nil {
+		return err
+	}
 	dashboards, err := buildDashboardRuntime(databases, humanAuth, dashboardRuntimeConfig{maxBodyBytes: *dashboardMaxBodyBytes})
 	if err != nil {
 		return err
@@ -313,6 +319,7 @@ func run() error {
 		options.AlertRules = alertRules
 		options.MetricQueries = humanAuth.queries
 		options.MetricHistory = humanAuth.history
+		options.PluginMetricHistory = pluginMetricHistory
 	}
 	if pluginsRuntime != nil {
 		options.PluginControl = pluginsRuntime.control

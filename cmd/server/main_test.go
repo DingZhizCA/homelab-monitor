@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
+	"github.com/DingZhizCA/homelab-monitor/internal/pluginmetrics"
 	"github.com/DingZhizCA/homelab-monitor/internal/plugins"
 	"github.com/DingZhizCA/homelab-monitor/internal/server"
 	"github.com/DingZhizCA/homelab-monitor/internal/testutil"
@@ -36,6 +37,12 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	}
 	if handler, err := buildPluginMetricBatchRuntime(nil, nil, pluginMetricBatchRuntimeConfig{}); err != nil || handler != nil {
 		t.Fatalf("disabled plugin metric handler=%v err=%v", handler, err)
+	}
+	if handler, err := buildPluginMetricHistoryRuntime(nil, nil, 0, pluginmetrics.HistoryBudget{}); err != nil || handler != nil {
+		t.Fatalf("disabled plugin history handler=%v err=%v", handler, err)
+	}
+	if handler, err := buildPluginMetricHistoryRuntime(nil, nil, 1, pluginmetrics.HistoryBudget{MaxRange: time.Hour, MaxPoints: 10}); err == nil || handler != nil {
+		t.Fatalf("partial plugin history handler=%v err=%v", handler, err)
 	}
 	if runtime, err := buildAuthRuntime(nil, nil, authRuntimeConfig{}); err != nil || runtime != nil {
 		t.Fatalf("disabled auth runtime=%v err=%v", runtime, err)

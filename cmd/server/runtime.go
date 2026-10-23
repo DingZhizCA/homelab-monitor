@@ -19,6 +19,7 @@ import (
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
 	"github.com/DingZhizCA/homelab-monitor/internal/auth"
 	"github.com/DingZhizCA/homelab-monitor/internal/dashboard"
+	"github.com/DingZhizCA/homelab-monitor/internal/pluginmetrics"
 	"github.com/DingZhizCA/homelab-monitor/internal/plugins"
 	"github.com/DingZhizCA/homelab-monitor/internal/server"
 	"github.com/DingZhizCA/homelab-monitor/internal/storage"
@@ -391,6 +392,24 @@ func buildMetricBatchRuntime(databases *storage.Databases, api *server.Handler, 
 		return nil, err
 	}
 	return server.NewMetricsBatchHandler(api, writer, config.maxSnapshots, config.maxBodyBytes)
+}
+
+func buildPluginMetricHistoryRuntime(databases *storage.Databases, authRuntime *authRuntime, maxScanned int, budget pluginmetrics.HistoryBudget) (*server.PluginMetricHistoryHandler, error) {
+	if maxScanned == 0 {
+		return nil, nil
+	}
+	if databases == nil || authRuntime == nil || maxScanned < 1 || budget.MaxRange <= 0 || budget.MaxPoints < 1 {
+		return nil, errors.New("storage, human authentication, history budgets, and a positive plugin observation scan limit are required together")
+	}
+	source, err := storage.NewPluginMetricHistorySource(databases.Metrics, maxScanned)
+	if err != nil {
+		return nil, err
+	}
+	service, err := pluginmetrics.NewHistoryService(source, budget)
+	if err != nil {
+		return nil, err
+	}
+	return server.NewPluginMetricHistoryHandler(service, authRuntime.handler)
 }
 
 func buildPluginMetricBatchRuntime(databases *storage.Databases, api *server.Handler, config pluginMetricBatchRuntimeConfig) (*server.PluginMetricsBatchHandler, error) {

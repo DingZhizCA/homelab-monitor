@@ -21,7 +21,7 @@ Web 仅通过家庭 LAN 与 Tailnet 访问，不直接暴露公网。局域网�
 
 Web 已有同源登录、首次 Owner 初始化和注销表单，以及 Session 检查：认证启用时，未登录页面不会请求设备 API、连接 SSE 或发送 Presence；Owner 创建后返回登录表单，登录成功后启动监控请求。Owner Session 可见的账户页调用 Owner 保护的账户创建、列表和状态修改 API，列表只返回 ID、用户名、角色和启用状态。角色或启用状态变更由用户仓储原子检查，始终保留至少一个启用 Owner；禁用账户的后续 Session 解析会拒绝并撤销其会话。若 Auth Handler 未注册，Server 返回认证 API 404，前端保持旧的无认证兼容路径。`internal/audit` 已定义不含自由文本和秘密载荷的最小管理事件；首次 Owner、账户创建、账户状态更新、插件 Desired State 发布、共享 Dashboard 管理和告警规则修订都要求对应仓储把事件与状态变更原子提交。认证中间件把已验证身份放入请求 Context。SQLite 用户/Session/账户审计、Dashboard 和告警规则仓储已经实现同事务审计、当前 Actor 复核、重开恢复、CAS 冲突及失败零写入测试；Incident 等其他业务域的生产审计、敏感操作再认证和 Viewer 字段级授权仍未实现。
 
-`cmd/server` 现可在显式提供私有存储目录、至少一个 HTTPS Origin、Session TTL、登录限速键容量/次数/窗口以及历史最大范围/点数时创建并注入 AuthHandler；缺少任一参数都会拒绝启动，默认运行仍保持认证关闭。启用后设备读取、SSE、Presence、当前指标和历史指标要求有效人类 Session，主动磁盘刷新仍仅限 Owner。额外提供 Dashboard 请求体字节上限后，Server 注入 SQLite Dashboard 仓储、内建 Descriptor 发布策略和对应认证 Handler。ADR-020 允许有效 Owner 与 Viewer 读取现有内建指标，因此共享发布拒绝未知 Descriptor；查询时仍再次鉴权。更细粒度设备/字段 ACL 尚未实现。
+`cmd/server` 现可在显式提供私有存储目录、至少一个 HTTPS Origin、Session TTL、登录限速键容量/次数/窗口以及历史最大范围/点数时创建并注入 AuthHandler；缺少任一参数都会拒绝启动，默认运行仍保持认证关闭。启用后设备读取、SSE、Presence、当前指标和历史指标要求有效人类 Session，主动磁盘刷新仍仅限 Owner。插件原始历史还要求显式扫描观测数预算，并以插件版本隔离语义；Owner 与 Viewer 均可读取，更细粒度 ACL 延后。额外提供 Dashboard 请求体字节上限后，Server 注入 SQLite Dashboard 仓储、内建 Descriptor 发布策略和对应认证 Handler。ADR-020 允许有效 Owner 与 Viewer 读取现有内建指标，因此共享发布拒绝未知 Descriptor；查询时仍再次鉴权。更细粒度设备/字段 ACL 尚未实现。
 
 Server 的认证、Dashboard、插件状态、磁盘刷新及指标写请求均使用有界严格 JSON 解码：对象重复键、未知字段和多余 JSON 值会被拒绝，避免重复认证字段、`allow_wake` 或修订字段按解析器的“最后值覆盖”行为产生歧义。
 

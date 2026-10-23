@@ -115,7 +115,7 @@ Server 可通过 `--tls-cert`、`--tls-key` 启用 HTTPS，并通过 `--agent-cr
 
 新建 SQLite 库使用 incremental auto-vacuum。旧库仍为 `auto_vacuum=NONE` 时，空间回收运行时会拒绝启动；一次性迁移必须由 Owner 显式增加 `--storage-incremental-vacuum-migrate` 和正值 `--storage-incremental-vacuum-migration-timeout`。迁移在 HTTP 监听前顺序转换两库，先检查可用空间能容纳当前数据库大小并保留 `--storage-filesystem-min-bytes`，期间执行全库 `VACUUM`，可能延长启动时间。转换完成后应移除这两个迁移参数；日常运行只执行有页数上限的 incremental vacuum，不周期执行全库 VACUUM。
 
-人类用户认证和指标查询也默认关闭。启用时必须提供 `--storage-dir`、至少一个 `--auth-origin`，以及正值的 `--auth-session-ttl`、`--auth-login-max-keys`、`--auth-login-max-attempts`、`--auth-login-window`、`--history-max-range` 和 `--history-max-points`；同时必须配置 HTTPS。参数不完整时 Server 拒绝启动，不会采用隐式 TTL、限速或历史查询预算。启用后，Owner 与 Viewer 均可读取现有内建当前值和历史指标；账户变更和主动磁盘刷新仍要求 Owner。再提供正值的 `--dashboard-max-body-bytes` 会挂载持久化 Dashboard 路由；共享草稿的创建、保存、发布、回滚和审计在 `core.db` 同一事务提交，未配置时该路由保持关闭。
+人类用户认证和指标查询也默认关闭。启用时必须提供 `--storage-dir`、至少一个 `--auth-origin`，以及正值的 `--auth-session-ttl`、`--auth-login-max-keys`、`--auth-login-max-attempts`、`--auth-login-window`、`--history-max-range` 和 `--history-max-points`；同时必须配置 HTTPS。插件原始历史路由另由正值 `--plugin-history-max-observations-scanned` 开启，并复用上述范围和点数预算；扫描预算用于限制稀疏指标查询检查的原始插件观测数。参数不完整时 Server 拒绝启动，不会采用隐式 TTL、限速或历史查询预算。启用后，Owner 与 Viewer 均可读取现有内建当前值和历史指标；账户变更和主动磁盘刷新仍要求 Owner。再提供正值的 `--dashboard-max-body-bytes` 会挂载持久化 Dashboard 路由；共享草稿的创建、保存、发布、回滚和审计在 `core.db` 同一事务提交，未配置时该路由保持关闭。
 
 告警规则管理同样默认关闭。完整启用人类认证后，再显式提供正值的 `--alert-rule-max-body-bytes`、`--alert-rule-max-depth` 和 `--alert-rule-max-conditions`，Server 才会挂载 Owner 规则路由。规则 Revision、当前指针及审计事件持久化到 `core.db`；这些参数只限制请求和表达式复杂度，不提供任何隐式阈值、规则模板或 Incident 策略。告警评估另由 `--alert-evaluation-enabled` 显式开启，并要求正值的 `--alert-evaluation-interval`、`--alert-evaluation-timeout`、`--alert-evaluation-max-rules`、`--incident-max-states`，以及明确给出 `--incident-pending-for`、`--incident-recovery-for`、`--incident-unknown-behavior` 和 `--incident-disabled-behavior`；立即转换必须写成 `0s`。调度器以稳定游标跨轮分页，只读取 Server 当前快照；单轮串行且有界，失败按规则隔离并记录，不触发采集。
 
@@ -142,7 +142,8 @@ Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设�
 | `POST/GET` | `/api/v1/auth/*` | 可选：首次 Owner、登录、Session、注销和 Owner 账户管理 |
 | `GET` | `/api/v1/dashboard/metrics/descriptors` | 可选：读取内建指标描述符 |
 | `GET` | `/api/v1/dashboard/metrics/latest` | 可选：读取 Server 内存中的最新指标 |
-| `GET` | `/api/v1/dashboard/metrics/history` | 可选：显式启用认证和历史预算后读取 SQLite 中的有界历史指标 |
+| `GET` | `/api/v1/dashboard/metrics/history` | 可选：显式启用认证和历史预算后读取 SQLite 中的有界内建历史指标 |
+| `GET` | `/api/v1/dashboard/plugin-metrics/history` | 可选：按设备、插件版本、Collector 和 Metric 精确读取有范围、点数及扫描预算的原始插件历史 |
 | `GET/POST/PUT` | `/api/v1/dashboards*` | 可选：认证用户管理持久化个人 Dashboard，Owner 管理共享草稿、发布历史和回滚 |
 | `GET/POST` | `/api/v1/agent/plugins/*` | 可选：设备认证的 Desired State 拉取、Reported State 上报和制品下载 |
 | `PUT` | `/api/v1/owner/plugins/desired` | 可选：Owner 发布带原子审计的插件期望状态 |
