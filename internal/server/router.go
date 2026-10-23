@@ -23,6 +23,7 @@ type RouterOptions struct {
 	MetricQueries       *MetricQueryHandler
 	MetricHistory       *MetricHistoryHandler
 	PluginMetricHistory *PluginMetricHistoryHandler
+	PluginMetricCatalog *PluginMetricCatalogHandler
 	MetricsBatch        *MetricsBatchHandler
 	PluginMetricsBatch  *PluginMetricsBatchHandler
 	AlertRules          *AlertRuleHandler
@@ -51,6 +52,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.PluginMetricHistory != nil && (options.Auth == nil || options.PluginMetricHistory.auth != options.Auth) {
 		return nil, errors.New("plugin metric history routes require the matching human authentication handler")
+	}
+	if options.PluginMetricCatalog != nil && (options.Auth == nil || options.PluginMetricCatalog.auth != options.Auth) {
+		return nil, errors.New("plugin metric catalog route requires the matching human authentication handler")
 	}
 	if options.MetricsBatch != nil && (options.MetricsBatch.api != options.API || options.API.devices == nil) {
 		return nil, errors.New("metric batch route requires the matching device-authenticated Agent API")
@@ -115,6 +119,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.PluginMetricHistory != nil {
 		mux.HandleFunc("/api/v1/dashboard/plugin-metrics/history", options.PluginMetricHistory.History)
+	}
+	if options.PluginMetricCatalog != nil {
+		mux.HandleFunc("/api/v1/dashboard/plugin-metrics/descriptors", options.PluginMetricCatalog.Descriptors)
 	}
 	if options.AlertRules != nil {
 		mux.Handle("/api/v1/owner/alert-rules", options.Auth.RequireOwner(http.HandlerFunc(options.AlertRules.Collection)))

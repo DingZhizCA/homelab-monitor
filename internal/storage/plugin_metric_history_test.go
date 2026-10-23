@@ -21,6 +21,7 @@ func TestPluginMetricHistorySourceFiltersMetricAndLabels(t *testing.T) {
 		t.Fatal(err)
 	}
 	batch := storagePluginBatch("plugin-history")
+	batch.Observations[0].Samples[0].Labels = map[string]string{"disk": "sda"}
 	batch.Observations[0].Samples = append(batch.Observations[0].Samples, metrics.PluginMetricObservation{MetricID: "temperature", Type: "gauge", Unit: "celsius", Value: json.RawMessage(`43`), Quality: "partial", Labels: map[string]string{"disk": "sdb"}})
 	if inserted, err := writer.AppendPluginBatch(context.Background(), batch); err != nil || !inserted {
 		t.Fatalf("inserted=%t err=%v", inserted, err)

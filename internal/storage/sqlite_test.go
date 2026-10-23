@@ -120,6 +120,42 @@ func TestOpenBackfillsLegacyMetricBatchReceiptTime(t *testing.T) {
 	}
 }
 
+func TestOpenBackfillsObservedPluginMetricDescriptors(t *testing.T) {
+	directory := filepath.Join(testutil.TempDir(t), "storage")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := openSQLite(context.Background(), filepath.Join(directory, "metrics.db"), "NORMAL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrations(context.Background(), database, metricMigrations[:7]); err != nil {
+		t.Fatal(err)
+	}
+	batch := storagePluginBatch("legacy-plugin")
+	batch.Observations[0].Samples[0].Labels = map[string]string{"disk": "sda"}
+	encoded, _ := json.Marshal(batch.Observations[0])
+	when := storageTimestamp(batch.Observations[0].ObservedAt)
+	if _, err := database.Exec(`INSERT INTO plugin_metric_batches (batch_id, device_id, content_sha256, observation_count, received_at) VALUES (?, ?, zeroblob(32), 1, ?)`, batch.ID, batch.DeviceID, when); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO plugin_metric_observations (batch_id, sequence, device_id, plugin_id, plugin_version, collector_id, observed_at, observation_json) VALUES (?, 0, ?, ?, ?, ?, ?, ?)`, batch.ID, batch.DeviceID, batch.Observations[0].PluginID, batch.Observations[0].PluginVersion, batch.Observations[0].CollectorID, when, encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	databases, err := Open(context.Background(), directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = databases.Close() })
+	var labels string
+	if err := databases.Metrics.QueryRow(`SELECT label_keys_json FROM plugin_metric_descriptors WHERE device_id = 'node-a' AND metric_id = 'temperature'`).Scan(&labels); err != nil || labels != `["disk"]` {
+		t.Fatalf("labels=%q err=%v", labels, err)
+	}
+}
+
 func TestApplyMigrationsIsTransactionalAndIdempotent(t *testing.T) {
 	databases, err := Open(context.Background(), filepath.Join(testutil.TempDir(t), "storage"))
 	if err != nil {

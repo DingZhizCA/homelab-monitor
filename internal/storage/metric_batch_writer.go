@@ -181,6 +181,69 @@ var metricMigrations = []Migration{
 	CREATE INDEX plugin_metric_aggregates_retention
 		ON plugin_metric_aggregates (resolution_seconds, bucket_start);`,
 	},
+	{
+		Version: 8,
+		Name:    "plugin_metric_descriptor_catalog",
+		SQL: `CREATE TABLE plugin_metric_descriptors (
+		device_id TEXT NOT NULL,
+		plugin_id TEXT NOT NULL,
+		plugin_version TEXT NOT NULL,
+		collector_id TEXT NOT NULL,
+		metric_id TEXT NOT NULL,
+		metric_type TEXT NOT NULL CHECK (metric_type IN ('gauge', 'counter', 'state', 'event')),
+		unit TEXT NOT NULL,
+		label_keys_json TEXT NOT NULL,
+		first_observed_at TEXT NOT NULL,
+		last_observed_at TEXT NOT NULL,
+		PRIMARY KEY (device_id, plugin_id, plugin_version, collector_id, metric_id)
+	);
+	CREATE INDEX plugin_metric_descriptors_device
+		ON plugin_metric_descriptors (device_id, plugin_id, plugin_version, collector_id, metric_id);
+	CREATE TEMP TABLE plugin_metric_descriptor_conflicts (
+		conflict INTEGER NOT NULL CHECK (conflict = 0)
+	);
+	WITH descriptor_samples AS (
+		SELECT observations.device_id,
+			observations.plugin_id,
+			observations.plugin_version,
+			observations.collector_id,
+			json_extract(sample.value, '$.metric_id') AS metric_id,
+			json_extract(sample.value, '$.type') AS metric_type,
+			json_extract(sample.value, '$.unit') AS unit,
+			COALESCE((SELECT json_group_array(key) FROM (
+				SELECT key FROM json_each(COALESCE(json_extract(sample.value, '$.labels'), '{}')) ORDER BY key
+			)), '[]') AS label_keys_json,
+			observations.observed_at
+		FROM plugin_metric_observations AS observations,
+			json_each(observations.observation_json, '$.samples') AS sample
+	)
+	INSERT INTO plugin_metric_descriptor_conflicts (conflict)
+	SELECT 1 FROM descriptor_samples
+	GROUP BY device_id, plugin_id, plugin_version, collector_id, metric_id
+	HAVING COUNT(DISTINCT json_array(metric_type, unit, label_keys_json)) > 1;
+	WITH descriptor_samples AS (
+		SELECT observations.device_id,
+			observations.plugin_id,
+			observations.plugin_version,
+			observations.collector_id,
+			json_extract(sample.value, '$.metric_id') AS metric_id,
+			json_extract(sample.value, '$.type') AS metric_type,
+			json_extract(sample.value, '$.unit') AS unit,
+			COALESCE((SELECT json_group_array(key) FROM (
+				SELECT key FROM json_each(COALESCE(json_extract(sample.value, '$.labels'), '{}')) ORDER BY key
+			)), '[]') AS label_keys_json,
+			observations.observed_at
+		FROM plugin_metric_observations AS observations,
+			json_each(observations.observation_json, '$.samples') AS sample
+	)
+	INSERT INTO plugin_metric_descriptors
+		(device_id, plugin_id, plugin_version, collector_id, metric_id, metric_type, unit, label_keys_json, first_observed_at, last_observed_at)
+	SELECT device_id, plugin_id, plugin_version, collector_id, metric_id,
+		MIN(metric_type), MIN(unit), MIN(label_keys_json), MIN(observed_at), MAX(observed_at)
+	FROM descriptor_samples
+	GROUP BY device_id, plugin_id, plugin_version, collector_id, metric_id;
+	DROP TABLE plugin_metric_descriptor_conflicts;`,
+	},
 }
 
 // MetricBatchWriter atomically persists and deduplicates bounded metric batches.

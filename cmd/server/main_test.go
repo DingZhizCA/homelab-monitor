@@ -41,6 +41,12 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if handler, err := buildPluginMetricHistoryRuntime(nil, nil, 0, pluginmetrics.HistoryBudget{}, nil); err != nil || handler != nil {
 		t.Fatalf("disabled plugin history handler=%v err=%v", handler, err)
 	}
+	if handler, err := buildPluginMetricCatalogRuntime(nil, nil, 0); err != nil || handler != nil {
+		t.Fatalf("disabled plugin catalog handler=%v err=%v", handler, err)
+	}
+	if handler, err := buildPluginMetricCatalogRuntime(nil, nil, 1); err == nil || handler != nil {
+		t.Fatalf("partial plugin catalog handler=%v err=%v", handler, err)
+	}
 	if handler, err := buildPluginMetricHistoryRuntime(nil, nil, 1, pluginmetrics.HistoryBudget{MaxRange: time.Hour, MaxPoints: 10}, nil); err == nil || handler != nil {
 		t.Fatalf("partial plugin history handler=%v err=%v", handler, err)
 	}

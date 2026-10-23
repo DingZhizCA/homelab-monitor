@@ -42,6 +42,7 @@
 | ADR-030 | Agent 插件采集调度与队列 | Collection Policy 使用独立显式 tick 扫描到期任务，每轮策略数、任务数和跨批次并发均有硬上限；每个任务使用策略自身超时，Policy 或 Plugin Revision 变化时必须先通过无副作用配置校验。一次到期尝试无论成功、失败或目标不可用都推进本地尝试时间，禁止按 tick 高频重试。成功观测进入独立原子快照队列，队列观测数、总样本数、编码字节及单批三项边界均显式配置；批次 ID 在确认前和重启后保持不变 | 2026-10-23 按推荐实施 |
 | ADR-031 | 插件原始历史查询 | 插件历史使用独立认证 API，并以 device/plugin/version/collector/metric 结构化选择器查询，插件版本必填，禁止将不同版本自动合并。请求复用显式时间范围和返回点数预算，并增加底层原始观测扫描数硬上限；稀疏查询达到扫描上限时明确失败，不返回伪完整的截断结果 | 2026-10-23 按推荐实施 |
 | ADR-032 | 插件类型化分层聚合 | 插件聚合键保留 device/plugin/version/collector/metric/type/unit/labels；Gauge 保存 mean/min/max/last，Counter 保存按时间排序的 delta/first/last/reset count，State 保存 last/transition count，Event 保存 event count。每个返回点显式区分 `raw` 与聚合种类并携带 `resolution_seconds`；聚合器在原始窗口内按桶重算以正确处理乱序，长桶按时间增量合并，运行中途建立且缺少桶前段的摘要标记 `partial`。没有完整重算来源的过旧乱序数据明确失败而不静默改写。周期、队列数、扫描数、超时和四层保留窗口均须显式配置 | 2026-10-23 用户选择 A 后实施 |
+| ADR-033 | 已观测插件 Descriptor Catalog | 当前插件 Descriptor 只有 metric/type/unit/label keys，Server 可从 Agent 已按运行时 Descriptor 验证的规范化观测无损重建。目录以 device/plugin/version/collector/metric 为键，与观测同事务登记；同一键的类型、单位或 label keys 漂移使整批回滚。认证目录只展示实际出现过数据的 Schema，并受显式每设备条数上限约束；首次成功观测前不可见，将来增加名称、说明等非观测字段时再引入独立发布协议 | 2026-10-23 按推荐实施 |
 
 ## 根据「全部按推荐」授权纳入基线、尚未逐项单独确认
 | ID | 领域 | 推荐基线 | 状态 |

@@ -115,6 +115,7 @@ func run() error {
 	historyMaxRange := flag.Duration("history-max-range", 0, "maximum time range for one historical metric query")
 	historyMaxPoints := flag.Int("history-max-points", 0, "maximum observations returned by one historical metric query")
 	pluginHistoryMaxScanned := flag.Int("plugin-history-max-observations-scanned", 0, "maximum raw plugin observations scanned by one history query")
+	pluginMetricMaxDescriptors := flag.Int("plugin-metric-max-descriptors", 0, "maximum observed plugin metric descriptors returned per device")
 	dashboardMaxBodyBytes := flag.Int64("dashboard-max-body-bytes", 0, "maximum Dashboard mutation request body bytes")
 	alertRuleMaxBodyBytes := flag.Int64("alert-rule-max-body-bytes", 0, "maximum alert-rule mutation request body bytes")
 	alertRuleMaxDepth := flag.Int("alert-rule-max-depth", 0, "maximum alert-rule expression depth")
@@ -294,6 +295,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	pluginMetricCatalog, err := buildPluginMetricCatalogRuntime(databases, humanAuth, *pluginMetricMaxDescriptors)
+	if err != nil {
+		return err
+	}
 	dashboards, err := buildDashboardRuntime(databases, humanAuth, dashboardRuntimeConfig{maxBodyBytes: *dashboardMaxBodyBytes})
 	if err != nil {
 		return err
@@ -342,6 +347,7 @@ func run() error {
 		options.MetricQueries = humanAuth.queries
 		options.MetricHistory = humanAuth.history
 		options.PluginMetricHistory = pluginMetricHistory
+		options.PluginMetricCatalog = pluginMetricCatalog
 	}
 	if pluginsRuntime != nil {
 		options.PluginControl = pluginsRuntime.control

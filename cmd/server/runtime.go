@@ -457,6 +457,24 @@ func buildPluginMetricHistoryRuntime(databases *storage.Databases, authRuntime *
 	return server.NewPluginMetricHistoryHandler(service, authRuntime.handler)
 }
 
+func buildPluginMetricCatalogRuntime(databases *storage.Databases, authRuntime *authRuntime, maxDescriptors int) (*server.PluginMetricCatalogHandler, error) {
+	if maxDescriptors == 0 {
+		return nil, nil
+	}
+	if databases == nil || authRuntime == nil || maxDescriptors < 1 {
+		return nil, errors.New("storage, human authentication, and a positive plugin descriptor limit are required together")
+	}
+	source, err := storage.NewPluginMetricDescriptorSource(databases.Metrics)
+	if err != nil {
+		return nil, err
+	}
+	service, err := pluginmetrics.NewCatalogService(source, maxDescriptors)
+	if err != nil {
+		return nil, err
+	}
+	return server.NewPluginMetricCatalogHandler(service, authRuntime.handler)
+}
+
 func buildPluginMetricBatchRuntime(databases *storage.Databases, api *server.Handler, config pluginMetricBatchRuntimeConfig) (*server.PluginMetricsBatchHandler, error) {
 	if config.disabled() {
 		return nil, nil

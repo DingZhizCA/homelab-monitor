@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/metrics"
@@ -117,6 +118,33 @@ func (w *PluginMetricBatchWriter) persist(ctx context.Context, batch metrics.Plu
 			observation.CollectorID, storageTimestamp(observation.ObservedAt), encoded)
 		if err != nil {
 			return false, metricWriteError(fmt.Sprintf("insert plugin observation %d", sequence), err)
+		}
+		for _, sample := range observation.Samples {
+			labelKeys := make([]string, 0, len(sample.Labels))
+			for key := range sample.Labels {
+				labelKeys = append(labelKeys, key)
+			}
+			sort.Strings(labelKeys)
+			encodedKeys, err := json.Marshal(labelKeys)
+			if err != nil {
+				return false, fmt.Errorf("encode plugin descriptor labels: %w", err)
+			}
+			result, err := tx.ExecContext(ctx, `INSERT INTO plugin_metric_descriptors
+				(device_id, plugin_id, plugin_version, collector_id, metric_id, metric_type, unit, label_keys_json, first_observed_at, last_observed_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(device_id, plugin_id, plugin_version, collector_id, metric_id) DO UPDATE SET
+					last_observed_at = MAX(last_observed_at, excluded.last_observed_at)
+				WHERE metric_type = excluded.metric_type AND unit = excluded.unit AND label_keys_json = excluded.label_keys_json`, batch.DeviceID, observation.PluginID, observation.PluginVersion, observation.CollectorID, sample.MetricID, sample.Type, sample.Unit, string(encodedKeys), storageTimestamp(observation.ObservedAt), storageTimestamp(observation.ObservedAt))
+			if err != nil {
+				return false, metricWriteError("register plugin metric descriptor", err)
+			}
+			changed, err := result.RowsAffected()
+			if err != nil {
+				return false, fmt.Errorf("inspect plugin descriptor registration: %w", err)
+			}
+			if changed != 1 {
+				return false, errors.New("plugin metric descriptor conflicts with its observed schema")
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
