@@ -23,6 +23,7 @@ type RouterOptions struct {
 	MetricQueries      *MetricQueryHandler
 	MetricHistory      *MetricHistoryHandler
 	MetricsBatch       *MetricsBatchHandler
+	PluginMetricsBatch *PluginMetricsBatchHandler
 	AlertRules         *AlertRuleHandler
 	WebDirectory       string
 }
@@ -50,6 +51,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	if options.MetricsBatch != nil && (options.MetricsBatch.api != options.API || options.API.devices == nil) {
 		return nil, errors.New("metric batch route requires the matching device-authenticated Agent API")
 	}
+	if options.PluginMetricsBatch != nil && (options.PluginMetricsBatch.api != options.API || options.API.devices == nil) {
+		return nil, errors.New("plugin metric batch route requires the matching device-authenticated Agent API")
+	}
 	if options.AlertRules != nil && (options.Auth == nil || options.AlertRules.auth != options.Auth) {
 		return nil, errors.New("alert-rule routes require the matching human authentication handler")
 	}
@@ -58,6 +62,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	mux.HandleFunc("/api/v1/metrics", options.API.Metrics)
 	if options.MetricsBatch != nil {
 		mux.HandleFunc("/api/v1/metrics/batch", options.MetricsBatch.Ingest)
+	}
+	if options.PluginMetricsBatch != nil {
+		mux.HandleFunc("/api/v1/plugin-metrics/batch", options.PluginMetricsBatch.Ingest)
 	}
 	if options.Auth == nil {
 		mux.Handle("/api/v1/auth/", http.NotFoundHandler())

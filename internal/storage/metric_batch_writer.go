@@ -101,6 +101,36 @@ var metricMigrations = []Migration{
 	CREATE INDEX metric_aggregates_retention
 		ON metric_aggregates (resolution_seconds, bucket_start);`,
 	},
+	{
+		Version: 5,
+		Name:    "plugin_metric_batches_and_observations",
+		SQL: `CREATE TABLE plugin_metric_batches (
+		batch_id TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL,
+		content_sha256 BLOB NOT NULL CHECK (length(content_sha256) = 32),
+		observation_count INTEGER NOT NULL CHECK (observation_count > 0),
+		received_at TEXT NOT NULL
+	);
+	CREATE TABLE plugin_metric_observations (
+		batch_id TEXT NOT NULL REFERENCES plugin_metric_batches(batch_id) ON DELETE RESTRICT,
+		sequence INTEGER NOT NULL CHECK (sequence >= 0),
+		device_id TEXT NOT NULL,
+		plugin_id TEXT NOT NULL,
+		plugin_version TEXT NOT NULL,
+		collector_id TEXT NOT NULL,
+		observed_at TEXT NOT NULL,
+		observation_json BLOB NOT NULL,
+		PRIMARY KEY (batch_id, sequence)
+	);
+	CREATE INDEX plugin_metric_observations_device_time
+		ON plugin_metric_observations (device_id, observed_at, batch_id, sequence);
+	CREATE INDEX plugin_metric_observations_source_time
+		ON plugin_metric_observations (plugin_id, collector_id, observed_at, batch_id, sequence);
+	CREATE INDEX plugin_metric_observations_retention
+		ON plugin_metric_observations (observed_at, batch_id, sequence);
+	CREATE INDEX plugin_metric_batches_retention
+		ON plugin_metric_batches (received_at, batch_id);`,
+	},
 }
 
 // MetricBatchWriter atomically persists and deduplicates bounded metric batches.

@@ -28,7 +28,7 @@ Server 的认证、Dashboard、插件状态、磁盘刷新及指标写请求均�
 ## Agent 网络认证（推荐）
 TLS 强制验证 Server 身份；首版采用独立设备 Token（强随机、权限范围绑定、可撤销轮换），逐步支持 mTLS 的双向认证。一次性 enrollment token 仅用于设备初次获批注册。所有请求须授权到 Device ID 和相应 API，不允许枚举其他设备数据。
 
-当前实现接受 Server 启动参数 `-tls-cert` 与 `-tls-key` 直接提供 HTTPS；二者必须成对出现。可选 `-agent-credentials` 加载设备校验文件，并且该选项要求 HTTPS。文件仅保存令牌 SHA-256 摘要，JSON 结构为 `{"devices":[{"device_id":"n1","token_sha256":"<64位小写十六进制>"}]}`；文件必须是非符号链接的普通文件，权限仅允许所有者访问，父目录不能由 group/other 写入，JSON 对象重复键会被拒绝。Agent 只在 `server.token` 配置非空时发送 Bearer Token，且配置校验要求 `server.url` 使用 HTTPS。指标和插件控制客户端都不自动跟随 HTTP 重定向，避免把凭据请求转交给其他地址。插件控制路由启用时复用逐设备凭据，并要求持久化人类认证、私有制品目录和显式单制品上限同时存在。
+当前实现接受 Server 启动参数 `-tls-cert` 与 `-tls-key` 直接提供 HTTPS；二者必须成对出现。可选 `-agent-credentials` 加载设备校验文件，并且该选项要求 HTTPS。文件仅保存令牌 SHA-256 摘要，JSON 结构为 `{"devices":[{"device_id":"n1","token_sha256":"<64位小写十六进制>"}]}`；文件必须是非符号链接的普通文件，权限仅允许所有者访问，父目录不能由 group/other 写入，JSON 对象重复键会被拒绝。Agent 只在 `server.token` 配置非空时发送 Bearer Token，且配置校验要求 `server.url` 使用 HTTPS。指标和插件控制客户端都不自动跟随 HTTP 重定向，避免把凭据请求转交给其他地址。内建指标批次和独立插件观测批次都要求批次 `device_id` 与 Bearer Token 绑定设备一致；插件观测还受显式观测数、总样本数和请求体字节数限制。插件控制路由启用时复用逐设备凭据，并要求持久化人类认证、私有制品目录和显式单制品上限同时存在。
 
 **当前兼容边界：**若 Server 未配置 `-agent-credentials`，指标 API 不强制设备 Token，也不要求 HTTPS；这是为既有本地运行协议保留的兼容模式，不能视为已启用 Agent 身份认证。部署到受信任网络之前应配置 HTTPS 与逐设备凭据；若要改成默认强制，需要先迁移现有 Agent 配置和凭据分发方式。
 

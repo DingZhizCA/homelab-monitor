@@ -42,6 +42,17 @@ type metricBatchRuntimeConfig struct {
 	guard        storage.MetricWriteGuard
 }
 
+type pluginMetricBatchRuntimeConfig struct {
+	maxObservations int
+	maxSamples      int
+	maxBodyBytes    int64
+	guard           storage.MetricWriteGuard
+}
+
+func (c pluginMetricBatchRuntimeConfig) disabled() bool {
+	return c.maxObservations == 0 && c.maxSamples == 0 && c.maxBodyBytes == 0
+}
+
 type checkpointRuntimeConfig struct {
 	interval          time.Duration
 	walThresholdBytes int64
@@ -342,7 +353,7 @@ func logCapacityObservation(observation storage.CapacityObservation) {
 	} else if observation.Level == "soft" {
 		level = "WARN"
 	}
-	log.Printf("component=storage level=%s capacity=%q metrics_used_bytes=%d metrics_allocated_bytes=%d metrics_wal_bytes=%d filesystem_free_bytes=%d incoming_bytes=%d cleanup_attempted=%t recovery_deferred=%t deleted_snapshots=%d deleted_receipts=%d error=%q msg=%q", level, observation.Level, observation.MetricsUsedBytes, observation.MetricsAllocatedBytes, observation.MetricsWALBytes, observation.FilesystemFreeBytes, observation.IncomingBytes, observation.CleanupAttempted, observation.RecoveryDeferred, observation.DeletedSnapshots, observation.DeletedReceipts, observation.Err, "metric storage capacity evaluated")
+	log.Printf("component=storage level=%s capacity=%q metrics_used_bytes=%d metrics_allocated_bytes=%d metrics_wal_bytes=%d filesystem_free_bytes=%d incoming_bytes=%d cleanup_attempted=%t recovery_deferred=%t deleted_snapshots=%d deleted_receipts=%d deleted_plugin_observations=%d deleted_plugin_receipts=%d error=%q msg=%q", level, observation.Level, observation.MetricsUsedBytes, observation.MetricsAllocatedBytes, observation.MetricsWALBytes, observation.FilesystemFreeBytes, observation.IncomingBytes, observation.CleanupAttempted, observation.RecoveryDeferred, observation.DeletedSnapshots, observation.DeletedReceipts, observation.DeletedPluginObservations, observation.DeletedPluginReceipts, observation.Err, "metric storage capacity evaluated")
 }
 
 func restoreMetricCurrentState(ctx context.Context, databases *storage.Databases, store *server.Store) (int, error) {
@@ -380,6 +391,20 @@ func buildMetricBatchRuntime(databases *storage.Databases, api *server.Handler, 
 		return nil, err
 	}
 	return server.NewMetricsBatchHandler(api, writer, config.maxSnapshots, config.maxBodyBytes)
+}
+
+func buildPluginMetricBatchRuntime(databases *storage.Databases, api *server.Handler, config pluginMetricBatchRuntimeConfig) (*server.PluginMetricsBatchHandler, error) {
+	if config.disabled() {
+		return nil, nil
+	}
+	if databases == nil || config.maxObservations < 1 || config.maxSamples < 1 || config.maxBodyBytes < 1 {
+		return nil, errors.New("storage-dir and all positive plugin metric batch limits must be configured together")
+	}
+	writer, err := storage.NewPluginMetricBatchWriterWithGuard(databases.Metrics, config.maxObservations, config.maxSamples, config.guard)
+	if err != nil {
+		return nil, err
+	}
+	return server.NewPluginMetricsBatchHandler(api, writer, config.maxObservations, config.maxSamples, config.maxBodyBytes)
 }
 
 func buildAuthRuntime(databases *storage.Databases, current dashboard.SnapshotSource, config authRuntimeConfig) (*authRuntime, error) {

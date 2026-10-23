@@ -80,6 +80,32 @@ func TestMetricRetentionManagerDeletesExpiredSnapshotsBeforeReceipts(t *testing.
 	}
 }
 
+func TestMetricRetentionManagerDeletesPluginObservationsBeforeReceipts(t *testing.T) {
+	databases := openTestDatabases(t)
+	writer, err := NewPluginMetricBatchWriterWithGuard(databases.Metrics, 1, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := storagePluginBatch("expired-plugin-batch")
+	if inserted, err := writer.AppendPluginBatch(context.Background(), batch); err != nil || !inserted {
+		t.Fatalf("inserted=%t err=%v", inserted, err)
+	}
+	old := storageTimestamp(time.Now().UTC().Add(-4 * time.Hour))
+	if _, err := databases.Metrics.Exec(`UPDATE plugin_metric_observations SET observed_at = ?; UPDATE plugin_metric_batches SET received_at = ?`, old, old); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewMetricRetentionManager(databases.Metrics, RetentionConfig{
+		Interval: time.Hour, RawRetention: time.Hour, ReceiptRetention: 2 * time.Hour, DeleteLimit: 10, Timeout: time.Second,
+	}, func(RetentionObservation) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := manager.Cleanup(context.Background())
+	if result.Err != nil || result.DeletedPluginObservations != 1 || result.DeletedPluginReceipts != 1 {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestMetricRetentionManagerBoundsEachCleanupAndStops(t *testing.T) {
 	databases := openTestDatabases(t)
 	writer, err := NewMetricBatchWriter(databases.Metrics, 1)

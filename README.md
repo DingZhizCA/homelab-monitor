@@ -109,7 +109,7 @@ collectors:
 
 Server 可通过 `--tls-cert`、`--tls-key` 启用 HTTPS，并通过 `--agent-credentials` 加载逐设备 Token 摘要。未配置 `--agent-credentials` 时，Server 为兼容旧协议不强制 Agent Token 或 HTTPS；该模式不提供 Agent 身份认证。配置格式和迁移边界见[安全说明](docs/04-security/01-authentication-and-trust.md)。
 
-持久化批量指标入口默认关闭。启用时必须同时显式提供 `--storage-dir`、`--metrics-batch-max-snapshots` 和 `--metrics-batch-max-body-bytes`，并配置上述 HTTPS 与逐设备凭据。`--storage-dir` 必须是 Alienware 本地 SSD 上仅 Owner 可访问的目录；程序会在其中创建 `core.db` 和 `metrics.db`。只要启用存储，还必须提供正值的 `--storage-checkpoint-interval`、`--storage-checkpoint-wal-bytes`、`--storage-checkpoint-timeout`、`--storage-space-recovery-interval`、`--storage-space-recovery-timeout`、`--storage-wal-truncate-bytes`、`--storage-vacuum-min-free-pages`、`--storage-vacuum-max-pages`、`--storage-retention-interval`、`--storage-raw-retention`、`--storage-receipt-retention`、`--storage-retention-delete-limit`、`--storage-retention-timeout`、`--storage-core-max-bytes`、`--storage-metrics-soft-bytes`、`--storage-metrics-hard-bytes` 和 `--storage-filesystem-min-bytes`；凭据保留窗口必须长于原始指标窗口，指标软阈值必须低于硬阈值。参数不完整时 Server 拒绝启动，不会自行选择维护周期、保留期限、操作预算、容量或批次默认值。
+持久化批量指标入口默认关闭。内建指标入口启用时必须同时显式提供 `--storage-dir`、`--metrics-batch-max-snapshots` 和 `--metrics-batch-max-body-bytes`；插件观测入口启用时必须同时提供 `--storage-dir`、`--plugin-metrics-batch-max-observations`、`--plugin-metrics-batch-max-samples` 和 `--plugin-metrics-batch-max-body-bytes`。两个入口都要求上述 HTTPS 与逐设备凭据。`--storage-dir` 必须是 Alienware 本地 SSD 上仅 Owner 可访问的目录；程序会在其中创建 `core.db` 和 `metrics.db`。只要启用存储，还必须提供正值的 `--storage-checkpoint-interval`、`--storage-checkpoint-wal-bytes`、`--storage-checkpoint-timeout`、`--storage-space-recovery-interval`、`--storage-space-recovery-timeout`、`--storage-wal-truncate-bytes`、`--storage-vacuum-min-free-pages`、`--storage-vacuum-max-pages`、`--storage-retention-interval`、`--storage-raw-retention`、`--storage-receipt-retention`、`--storage-retention-delete-limit`、`--storage-retention-timeout`、`--storage-core-max-bytes`、`--storage-metrics-soft-bytes`、`--storage-metrics-hard-bytes` 和 `--storage-filesystem-min-bytes`；凭据保留窗口必须长于原始指标窗口，指标软阈值必须低于硬阈值。参数不完整时 Server 拒绝启动，不会自行选择维护周期、保留期限、操作预算、容量或批次默认值。
 
 持久化存储默认整体关闭；一旦配置 `--storage-dir`，分钟、小时和日聚合属于完整存储运行时的必填部分。必须同时提供正值的 `--storage-aggregation-interval`、`--storage-aggregation-max-snapshots`、`--storage-aggregation-timeout`、`--storage-minute-retention`、`--storage-hour-retention` 和 `--storage-day-retention`，并完整启用上述保留任务；四层窗口必须满足原始 < 分钟 < 小时 < 日。聚合任务将现有内建 Descriptor 写入 UTC 时间桶，原始清理会跳过未完成聚合的快照。启用人类历史查询时，同一窗口配置用于从日、小时、分钟和原始层拼接结果；聚合点为桶内有效值均值并标记 `estimated`。
 
@@ -131,7 +131,8 @@ Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设�
 |---|---|---|
 | `GET` | `/api/v1/health` | 健康检查 |
 | `POST` | `/api/v1/metrics` | Agent 上报指标并接收控制指令 |
-| `POST` | `/api/v1/metrics/batch` | 可选：接收认证的幂等指标批次；容量无法恢复时返回 507 |
+| `POST` | `/api/v1/metrics/batch` | 可选：接收认证的幂等内建指标批次；容量无法恢复时返回 507 |
+| `POST` | `/api/v1/plugin-metrics/batch` | 可选：接收认证且显式限制观测数、样本数和字节数的幂等插件观测批次 |
 | `GET` | `/api/v1/devices` | 设备列表和最新状态 |
 | `GET` | `/api/v1/devices/{device_id}` | 单台设备最新状态 |
 | `GET` | `/api/v1/events` | SSE 实时指标流 |

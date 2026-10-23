@@ -28,15 +28,17 @@ type RetentionConfig struct {
 
 // RetentionObservation reports one bounded cleanup transaction.
 type RetentionObservation struct {
-	RawCutoff        time.Time
-	ReceiptCutoff    time.Time
-	DeletedSnapshots int64
-	DeletedReceipts  int64
-	DeletedMinute    int64
-	DeletedHour      int64
-	DeletedDay       int64
-	Duration         time.Duration
-	Err              error
+	RawCutoff                 time.Time
+	ReceiptCutoff             time.Time
+	DeletedSnapshots          int64
+	DeletedReceipts           int64
+	DeletedPluginObservations int64
+	DeletedPluginReceipts     int64
+	DeletedMinute             int64
+	DeletedHour               int64
+	DeletedDay                int64
+	Duration                  time.Duration
+	Err                       error
 }
 
 // RetentionObserver receives every scheduled or directly requested result.
@@ -116,6 +118,22 @@ func (m *MetricRetentionManager) Cleanup(ctx context.Context) RetentionObservati
 		observation.Err = fmt.Errorf("count deleted metric snapshots: %w", err)
 		return m.finish(started, observation)
 	}
+	result, err = transaction.ExecContext(operationContext, `DELETE FROM plugin_metric_observations
+		WHERE rowid IN (
+			SELECT rowid FROM plugin_metric_observations
+			WHERE observed_at < ?
+			ORDER BY observed_at, batch_id, sequence
+			LIMIT ?
+		)`, storageTimestamp(observation.RawCutoff), m.config.DeleteLimit)
+	if err != nil {
+		observation.Err = fmt.Errorf("delete expired plugin metric observations: %w", err)
+		return m.finish(started, observation)
+	}
+	observation.DeletedPluginObservations, err = result.RowsAffected()
+	if err != nil {
+		observation.Err = fmt.Errorf("count deleted plugin metric observations: %w", err)
+		return m.finish(started, observation)
+	}
 	if configHasAggregateRetention(m.config) {
 		for _, tier := range []struct {
 			resolution int
@@ -159,9 +177,31 @@ func (m *MetricRetentionManager) Cleanup(ctx context.Context) RetentionObservati
 		observation.Err = fmt.Errorf("count deleted metric receipts: %w", err)
 		return m.finish(started, observation)
 	}
+	result, err = transaction.ExecContext(operationContext, `DELETE FROM plugin_metric_batches
+		WHERE batch_id IN (
+			SELECT batches.batch_id FROM plugin_metric_batches AS batches
+			WHERE batches.received_at < ?
+				AND NOT EXISTS (
+					SELECT 1 FROM plugin_metric_observations AS observations
+					WHERE observations.batch_id = batches.batch_id
+				)
+			ORDER BY batches.received_at, batches.batch_id
+			LIMIT ?
+		)`, storageTimestamp(observation.ReceiptCutoff), m.config.DeleteLimit)
+	if err != nil {
+		observation.Err = fmt.Errorf("delete expired plugin metric receipts: %w", err)
+		return m.finish(started, observation)
+	}
+	observation.DeletedPluginReceipts, err = result.RowsAffected()
+	if err != nil {
+		observation.Err = fmt.Errorf("count deleted plugin metric receipts: %w", err)
+		return m.finish(started, observation)
+	}
 	if err := transaction.Commit(); err != nil {
 		observation.DeletedSnapshots = 0
 		observation.DeletedReceipts = 0
+		observation.DeletedPluginObservations = 0
+		observation.DeletedPluginReceipts = 0
 		observation.DeletedMinute = 0
 		observation.DeletedHour = 0
 		observation.DeletedDay = 0

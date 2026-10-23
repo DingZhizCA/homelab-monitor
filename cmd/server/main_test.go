@@ -34,6 +34,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if handler, err := buildMetricBatchRuntime(nil, nil, metricBatchRuntimeConfig{}); err != nil || handler != nil {
 		t.Fatalf("disabled metric handler=%v err=%v", handler, err)
 	}
+	if handler, err := buildPluginMetricBatchRuntime(nil, nil, pluginMetricBatchRuntimeConfig{}); err != nil || handler != nil {
+		t.Fatalf("disabled plugin metric handler=%v err=%v", handler, err)
+	}
 	if runtime, err := buildAuthRuntime(nil, nil, authRuntimeConfig{}); err != nil || runtime != nil {
 		t.Fatalf("disabled auth runtime=%v err=%v", runtime, err)
 	}
@@ -64,6 +67,11 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	for _, config := range []metricBatchRuntimeConfig{{maxSnapshots: 1}, {maxBodyBytes: 1024}} {
 		if handler, err := buildMetricBatchRuntime(nil, nil, config); err == nil || handler != nil {
 			t.Fatalf("partial metric config %+v handler=%v err=%v", config, handler, err)
+		}
+	}
+	for _, config := range []pluginMetricBatchRuntimeConfig{{maxObservations: 1}, {maxSamples: 1}, {maxBodyBytes: 1024}} {
+		if handler, err := buildPluginMetricBatchRuntime(nil, nil, config); err == nil || handler != nil {
+			t.Fatalf("partial plugin metric config %+v handler=%v err=%v", config, handler, err)
 		}
 	}
 	partialAuth := authRuntimeConfig{origins: []string{"https://monitor.example"}}

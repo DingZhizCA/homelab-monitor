@@ -30,17 +30,19 @@ type CapacityConfig struct {
 
 // CapacityObservation describes a threshold transition or emergency cleanup.
 type CapacityObservation struct {
-	Level                 string
-	MetricsUsedBytes      int64
-	MetricsAllocatedBytes int64
-	MetricsWALBytes       int64
-	FilesystemFreeBytes   int64
-	IncomingBytes         int64
-	CleanupAttempted      bool
-	RecoveryDeferred      bool
-	DeletedSnapshots      int64
-	DeletedReceipts       int64
-	Err                   error
+	Level                     string
+	MetricsUsedBytes          int64
+	MetricsAllocatedBytes     int64
+	MetricsWALBytes           int64
+	FilesystemFreeBytes       int64
+	IncomingBytes             int64
+	CleanupAttempted          bool
+	RecoveryDeferred          bool
+	DeletedSnapshots          int64
+	DeletedReceipts           int64
+	DeletedPluginObservations int64
+	DeletedPluginReceipts     int64
+	Err                       error
 }
 
 // CapacityObserver receives threshold transitions and hard-limit attempts.
@@ -136,6 +138,8 @@ func (m *CapacityManager) prepareMetricWrite(ctx context.Context, incomingBytes 
 		cleanup := m.retention.Cleanup(ctx)
 		observation.DeletedSnapshots = cleanup.DeletedSnapshots
 		observation.DeletedReceipts = cleanup.DeletedReceipts
+		observation.DeletedPluginObservations = cleanup.DeletedPluginObservations
+		observation.DeletedPluginReceipts = cleanup.DeletedPluginReceipts
 		if cleanup.Err == nil {
 			checkpoint := m.checkpoint.CheckpointMetricsForCapacity(ctx)
 			if checkpoint.Err != nil {
@@ -147,6 +151,8 @@ func (m *CapacityManager) prepareMetricWrite(ctx context.Context, incomingBytes 
 			after.CleanupAttempted = true
 			after.DeletedSnapshots = observation.DeletedSnapshots
 			after.DeletedReceipts = observation.DeletedReceipts
+			after.DeletedPluginObservations = observation.DeletedPluginObservations
+			after.DeletedPluginReceipts = observation.DeletedPluginReceipts
 			observation = after
 		}
 		if cleanup.Err != nil {

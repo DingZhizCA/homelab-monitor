@@ -98,6 +98,9 @@ func run() error {
 	filesystemMinBytes := flag.Int64("storage-filesystem-min-bytes", 0, "filesystem bytes reserved from metric ingestion")
 	metricMaxSnapshots := flag.Int("metrics-batch-max-snapshots", 0, "maximum snapshots accepted in one persisted Agent batch")
 	metricMaxBodyBytes := flag.Int64("metrics-batch-max-body-bytes", 0, "maximum encoded bytes accepted by the persisted Agent batch endpoint")
+	pluginMetricMaxObservations := flag.Int("plugin-metrics-batch-max-observations", 0, "maximum plugin observations accepted in one persisted batch")
+	pluginMetricMaxSamples := flag.Int("plugin-metrics-batch-max-samples", 0, "maximum total plugin samples accepted in one persisted batch")
+	pluginMetricMaxBodyBytes := flag.Int64("plugin-metrics-batch-max-body-bytes", 0, "maximum encoded bytes accepted by the plugin metric batch endpoint")
 	var authOrigins stringListFlag
 	flag.Var(&authOrigins, "auth-origin", "allowed HTTPS browser Origin; repeat for additional Origins")
 	authSessionTTL := flag.Duration("auth-session-ttl", 0, "server-side browser Session lifetime")
@@ -138,12 +141,15 @@ func run() error {
 		log.Printf("component=server level=WARN msg=%q", "Agent device authentication is disabled for compatibility; metrics requests are not bound to device credentials")
 	}
 	metricConfig := metricBatchRuntimeConfig{maxSnapshots: *metricMaxSnapshots, maxBodyBytes: *metricMaxBodyBytes}
+	pluginMetricConfig := pluginMetricBatchRuntimeConfig{
+		maxObservations: *pluginMetricMaxObservations, maxSamples: *pluginMetricMaxSamples, maxBodyBytes: *pluginMetricMaxBodyBytes,
+	}
 	capacityConfig := capacityRuntimeConfig{
 		coreMaxBytes: *coreMaxBytes, metricsSoftBytes: *metricsSoftBytes,
 		metricsHardBytes: *metricsHardBytes, filesystemMinBytes: *filesystemMinBytes,
 	}
-	if !metricConfig.disabled() && *agentCredentials == "" {
-		return errors.New("persisted metrics batches require Agent device credentials")
+	if (!metricConfig.disabled() || !pluginMetricConfig.disabled()) && *agentCredentials == "" {
+		return errors.New("persisted metric batches require Agent device credentials")
 	}
 	authConfig := authRuntimeConfig{
 		origins: authOrigins, sessionTTL: *authSessionTTL,
@@ -236,6 +242,7 @@ func run() error {
 		return err
 	}
 	metricConfig.guard = capacityManager
+	pluginMetricConfig.guard = capacityManager
 	store := server.NewStore()
 	restored, err := restoreMetricCurrentState(context.Background(), databases, store)
 	if err != nil {
@@ -248,6 +255,10 @@ func run() error {
 	presence := server.NewPresence()
 	handler := server.NewHandlerWithDeviceAuthorizer(store, broker, deviceAuthorizer, presence)
 	metricsBatch, err := buildMetricBatchRuntime(databases, handler, metricConfig)
+	if err != nil {
+		return err
+	}
+	pluginMetricsBatch, err := buildPluginMetricBatchRuntime(databases, handler, pluginMetricConfig)
 	if err != nil {
 		return err
 	}
@@ -295,7 +306,7 @@ func run() error {
 			}
 		}()
 	}
-	options := server.RouterOptions{API: handler, MetricsBatch: metricsBatch, WebDirectory: *webDir}
+	options := server.RouterOptions{API: handler, MetricsBatch: metricsBatch, PluginMetricsBatch: pluginMetricsBatch, WebDirectory: *webDir}
 	if humanAuth != nil {
 		options.Auth = humanAuth.handler
 		options.Dashboards = dashboards
