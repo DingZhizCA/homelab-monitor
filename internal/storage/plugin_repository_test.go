@@ -124,6 +124,61 @@ func TestPluginRepositoryListsOnlyEnabledDesiredArtifactReferences(t *testing.T)
 	}
 }
 
+func TestPluginRepositoryPersistsCollectionPolicyAndAuditIdempotently(t *testing.T) {
+	databases := openTestDatabases(t)
+	ownerID := createPluginOwner(t, databases, "owner-policy")
+	repository, err := NewBoundedPluginRepository(databases.Core, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := pluginDesiredFixture(1, true)
+	if err := repository.SetDesiredWithAuditContext(context.Background(), desired, pluginAuditFixture(t, ownerID, desired)); err != nil {
+		t.Fatal(err)
+	}
+	policy := plugins.CollectionPolicy{DeviceID: "node-a", PluginID: "health", CollectorID: "status", Revision: 1, PluginRevision: 1, Enabled: true, IntervalSeconds: 60, TimeoutMilliseconds: 5000, Config: []byte(`{"detail":false}`)}
+	event, err := audit.NewEvent(time.Now(), ownerID, plugins.CollectionPolicyAuditAction, plugins.CollectionPolicyAuditResourceType, plugins.CollectionPolicyAuditResourceID(policy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SetCollectionPolicyWithAuditContext(context.Background(), policy, event); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SetCollectionPolicyWithAuditContext(context.Background(), policy, event); err != nil {
+		t.Fatalf("idempotent policy retry: %v", err)
+	}
+	policies, err := repository.CollectionPoliciesForDeviceContext(context.Background(), "node-a")
+	if err != nil || len(policies) != 1 || !plugins.EqualCollectionPolicy(policies[0], policy) {
+		t.Fatalf("policies=%+v err=%v", policies, err)
+	}
+	var events int
+	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action = ?`, plugins.CollectionPolicyAuditAction).Scan(&events); err != nil || events != 1 {
+		t.Fatalf("events=%d err=%v", events, err)
+	}
+	conflict := policy
+	conflict.IntervalSeconds = 120
+	if err := repository.SetCollectionPolicyWithAuditContext(context.Background(), conflict, event); !errors.Is(err, plugins.ErrStateConflict) {
+		t.Fatalf("same revision conflict=%v", err)
+	}
+	wrongTarget := policy
+	wrongTarget.Revision = 2
+	wrongTarget.PluginRevision = 2
+	wrongEvent, err := audit.NewEvent(time.Now(), ownerID, plugins.CollectionPolicyAuditAction, plugins.CollectionPolicyAuditResourceType, plugins.CollectionPolicyAuditResourceID(wrongTarget))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SetCollectionPolicyWithAuditContext(context.Background(), wrongTarget, wrongEvent); !errors.Is(err, plugins.ErrCollectionTargetUnavailable) {
+		t.Fatalf("unavailable plugin revision error=%v", err)
+	}
+	second := plugins.CollectionPolicy{DeviceID: "node-a", PluginID: "health", CollectorID: "other", Revision: 1}
+	secondEvent, err := audit.NewEvent(time.Now(), ownerID, plugins.CollectionPolicyAuditAction, plugins.CollectionPolicyAuditResourceType, plugins.CollectionPolicyAuditResourceID(second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SetCollectionPolicyWithAuditContext(context.Background(), second, secondEvent); !errors.Is(err, plugins.ErrCollectionPolicyCapacity) {
+		t.Fatalf("policy capacity error=%v", err)
+	}
+}
+
 func TestPluginRepositoryReportedBatchIsAtomicAndDurable(t *testing.T) {
 	databases := openTestDatabases(t)
 	repository, err := NewPluginRepository(databases.Core)

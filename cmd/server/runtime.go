@@ -162,25 +162,27 @@ func (c alertEvaluationRuntimeConfig) disabled() bool {
 }
 
 type pluginRuntimeConfig struct {
-	artifactDirectory  string
-	maxArtifactBytes   int64
-	maxRepositoryBytes int64
-	maxPackages        int
-	maxScanEntries     int
-	cleanupInterval    time.Duration
-	orphanGrace        time.Duration
-	cleanupDeleteLimit int
-	cleanupTimeout     time.Duration
+	artifactDirectory     string
+	maxArtifactBytes      int64
+	maxRepositoryBytes    int64
+	maxPackages           int
+	maxScanEntries        int
+	maxCollectionPolicies int
+	cleanupInterval       time.Duration
+	orphanGrace           time.Duration
+	cleanupDeleteLimit    int
+	cleanupTimeout        time.Duration
 }
 
 func (c pluginRuntimeConfig) disabled() bool {
-	return c.artifactDirectory == "" && c.maxArtifactBytes == 0 && c.maxRepositoryBytes == 0 && c.maxPackages == 0 && c.maxScanEntries == 0 && c.cleanupInterval == 0 && c.orphanGrace == 0 && c.cleanupDeleteLimit == 0 && c.cleanupTimeout == 0
+	return c.artifactDirectory == "" && c.maxArtifactBytes == 0 && c.maxRepositoryBytes == 0 && c.maxPackages == 0 && c.maxScanEntries == 0 && c.maxCollectionPolicies == 0 && c.cleanupInterval == 0 && c.orphanGrace == 0 && c.cleanupDeleteLimit == 0 && c.cleanupTimeout == 0
 }
 
 type pluginRuntime struct {
 	control     *server.PluginControlHandler
 	artifacts   *server.PluginArtifactHandler
 	admin       *server.PluginAdminHandler
+	policies    *server.PluginCollectionPolicyHandler
 	repository  *plugins.FileArtifactRepository
 	maintenance *plugins.ArtifactMaintenance
 }
@@ -516,10 +518,10 @@ func buildPluginRuntime(databases *storage.Databases, devices server.DeviceAutho
 	if config.disabled() {
 		return nil, nil
 	}
-	if databases == nil || devices == nil || humanAuth == nil || config.artifactDirectory == "" || config.maxArtifactBytes < 1 || config.maxRepositoryBytes < config.maxArtifactBytes || config.maxPackages < 1 || config.maxScanEntries < config.maxPackages || config.cleanupInterval <= 0 || config.orphanGrace <= 0 || config.cleanupDeleteLimit < 1 || config.cleanupTimeout <= 0 {
+	if databases == nil || devices == nil || humanAuth == nil || config.artifactDirectory == "" || config.maxArtifactBytes < 1 || config.maxRepositoryBytes < config.maxArtifactBytes || config.maxPackages < 1 || config.maxScanEntries < config.maxPackages || config.maxCollectionPolicies < 1 || config.cleanupInterval <= 0 || config.orphanGrace <= 0 || config.cleanupDeleteLimit < 1 || config.cleanupTimeout <= 0 {
 		return nil, errors.New("storage, authentication, plugin artifact directory, capacity limits, and bounded cleanup settings are required together")
 	}
-	state, err := storage.NewPluginRepository(databases.Core)
+	state, err := storage.NewBoundedPluginRepository(databases.Core, config.maxCollectionPolicies)
 	if err != nil {
 		return nil, err
 	}
@@ -549,6 +551,10 @@ func buildPluginRuntime(databases *storage.Databases, devices server.DeviceAutho
 	if err != nil {
 		return nil, err
 	}
+	policies, err := server.NewPluginCollectionPolicyHandler(state, artifacts, devices)
+	if err != nil {
+		return nil, err
+	}
 	maintenance, err := plugins.NewArtifactMaintenance(artifacts, state, mutation, plugins.ArtifactMaintenanceConfig{
 		Interval: config.cleanupInterval, OrphanGrace: config.orphanGrace,
 		DeleteLimit: config.cleanupDeleteLimit, Timeout: config.cleanupTimeout,
@@ -557,7 +563,7 @@ func buildPluginRuntime(databases *storage.Databases, devices server.DeviceAutho
 		return nil, err
 	}
 	closeOnError = false
-	return &pluginRuntime{control: control, artifacts: download, admin: admin, repository: artifacts, maintenance: maintenance}, nil
+	return &pluginRuntime{control: control, artifacts: download, admin: admin, policies: policies, repository: artifacts, maintenance: maintenance}, nil
 }
 
 func logArtifactMaintenanceObservation(observation plugins.ArtifactMaintenanceObservation) {

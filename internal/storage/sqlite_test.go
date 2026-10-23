@@ -41,7 +41,7 @@ func TestOpenCreatesIsolatedDatabasesWithApprovedSettings(t *testing.T) {
 	for name, fixture := range map[string]struct {
 		database *sql.DB
 		want     int
-	}{"core": {databases.Core, 5}, "metrics": {databases.Metrics, 4}} {
+	}{"core": {databases.Core, len(coreMigrations)}, "metrics": {databases.Metrics, len(metricMigrations)}} {
 		var count int
 		if err := fixture.database.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 			t.Fatalf("%s migration ledger: %v", name, err)
@@ -134,7 +134,7 @@ func TestApplyMigrationsIsTransactionalAndIdempotent(t *testing.T) {
 		t.Fatalf("repeat migrations: %v", err)
 	}
 	var count int
-	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 6 {
+	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != len(coreMigrations)+1 {
 		t.Fatalf("migration count=%d err=%v", count, err)
 	}
 

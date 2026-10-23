@@ -124,6 +124,7 @@ func run() error {
 	pluginMaxArtifactBytes := flag.Int64("plugin-max-artifact-bytes", 0, "maximum plugin artifact bytes read or served")
 	pluginMaxRepositoryBytes := flag.Int64("plugin-max-repository-bytes", 0, "maximum bytes stored in plugin package files")
 	pluginMaxPackages := flag.Int("plugin-max-packages", 0, "maximum immutable plugin packages retained")
+	pluginMaxCollectionPolicies := flag.Int("plugin-max-collection-policies", 0, "maximum collection policies retained per device")
 	pluginMaxScanEntries := flag.Int("plugin-max-scan-entries", 0, "maximum filesystem entries inspected per artifact operation")
 	pluginCleanupInterval := flag.Duration("plugin-cleanup-interval", 0, "interval between bounded plugin artifact cleanup passes")
 	pluginOrphanGrace := flag.Duration("plugin-orphan-grace", 0, "minimum unreferenced package age before cleanup")
@@ -280,7 +281,8 @@ func run() error {
 		maxArtifactBytes:   *pluginMaxArtifactBytes,
 		maxRepositoryBytes: *pluginMaxRepositoryBytes,
 		maxPackages:        *pluginMaxPackages, maxScanEntries: *pluginMaxScanEntries,
-		cleanupInterval: *pluginCleanupInterval, orphanGrace: *pluginOrphanGrace,
+		maxCollectionPolicies: *pluginMaxCollectionPolicies,
+		cleanupInterval:       *pluginCleanupInterval, orphanGrace: *pluginOrphanGrace,
 		cleanupDeleteLimit: *pluginCleanupDeleteLimit, cleanupTimeout: *pluginCleanupTimeout,
 	})
 	if err != nil {
@@ -305,6 +307,7 @@ func run() error {
 		options.PluginControl = pluginsRuntime.control
 		options.PluginArtifacts = pluginsRuntime.artifacts
 		options.PluginAdmin = pluginsRuntime.admin
+		options.CollectionPolicies = pluginsRuntime.policies
 	}
 	router, err := server.NewRouter(options)
 	if err != nil {

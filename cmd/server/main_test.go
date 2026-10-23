@@ -312,7 +312,8 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	pluginsRuntime, err := buildPluginRuntime(databases, allowTestDevice{}, humanAuth, pluginRuntimeConfig{
 		artifactDirectory: artifactDirectory, maxArtifactBytes: 1 << 20, maxRepositoryBytes: 16 << 20,
 		maxPackages: 16, maxScanEntries: 256, cleanupInterval: time.Hour, orphanGrace: 24 * time.Hour,
-		cleanupDeleteLimit: 2, cleanupTimeout: time.Second,
+		maxCollectionPolicies: 32,
+		cleanupDeleteLimit:    2, cleanupTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)

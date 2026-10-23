@@ -16,6 +16,7 @@ import (
 
 func TestPluginControlClientExchangesDeviceScopedState(t *testing.T) {
 	desired := plugins.DesiredState{DeviceID: "node/a", PluginID: "health", Revision: 4, Version: "1.2.0", Artifact: plugins.ArtifactReference{Platform: plugins.Platform{OS: "linux", Arch: "arm64"}, SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}, Enabled: true}
+	policy := plugins.CollectionPolicy{DeviceID: "node/a", PluginID: "health", CollectorID: "status", Revision: 2, PluginRevision: 4, Enabled: true, IntervalSeconds: 60, TimeoutMilliseconds: 5000, Config: []byte(`{}`)}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer device-token" {
 			t.Errorf("Authorization = %q", got)
@@ -41,6 +42,11 @@ func TestPluginControlClientExchangesDeviceScopedState(t *testing.T) {
 				t.Errorf("report body = %+v", request)
 			}
 			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agent/plugins/collection-policies":
+			_ = json.NewEncoder(w).Encode(struct {
+				DeviceID string                     `json:"device_id"`
+				Policies []plugins.CollectionPolicy `json:"policies"`
+			}{"node/a", []plugins.CollectionPolicy{policy}})
 		default:
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
 			http.NotFound(w, r)
@@ -58,6 +64,10 @@ func TestPluginControlClientExchangesDeviceScopedState(t *testing.T) {
 	}
 	if err := client.Reported(context.Background(), "node/a", []plugins.ReportedState{{DeviceID: "node/a", PluginID: "health", ObservedRev: 4, AppliedRev: 3, Lifecycle: plugins.StateRunning}}); err != nil {
 		t.Fatal(err)
+	}
+	policies, err := client.CollectionPolicies(context.Background(), "node/a")
+	if err != nil || len(policies) != 1 || !plugins.EqualCollectionPolicy(policies[0], policy) {
+		t.Fatalf("CollectionPolicies() = %+v, %v", policies, err)
 	}
 }
 

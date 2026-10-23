@@ -40,7 +40,7 @@ TLS 强制验证 Server 身份；首版采用独立设备 Token（强随机、�
 ## 管理操作与审计
 插件安装/升级、密钥轮换、规则发布/回滚、身份合并拆分、敏感诊断开启及历史删除需审计。日志不得记录密码、Token、SSH 私钥、完整 Push Endpoint 或敏感连接载荷。
 
-审计不能由 Handler 在业务写入后另行追加，否则审计失败时状态已经不可回滚。当前账户、插件 Desired State、共享 Dashboard 和告警规则仓储契约因此要求生产适配器在同一事务内写入事件；事件只包含 UTC 时间、Actor ID、稳定 Action、资源类型和资源 ID。共享 Dashboard 创建的 ID 由仓储分配，仓储须在提交前用该 ID 调用事件工厂，并将返回事件与 Dashboard 一起提交。账户、插件 Desired State、共享 Dashboard 和告警规则均已在 `core.db` 中实现该事务边界。审计事件不写入普通应用日志载荷。
+审计不能由 Handler 在业务写入后另行追加，否则审计失败时状态已经不可回滚。当前账户、插件 Desired State、插件 Collection Policy、共享 Dashboard 和告警规则仓储契约因此要求生产适配器在同一事务内写入事件；事件只包含 UTC 时间、Actor ID、稳定 Action、资源类型和资源 ID。Collection Policy 启用写入还在同一事务复核绑定的插件 Desired Revision 仍启用；HTTP 前置校验确认 Collector 存在于对应签名 Manifest。共享 Dashboard 创建的 ID 由仓储分配，仓储须在提交前用该 ID 调用事件工厂，并将返回事件与 Dashboard 一起提交。上述对象均已在 `core.db` 中实现对应事务边界。审计事件不写入普通应用日志载荷。
 
 ## HTTPS 与现有服务
 LAN 提供可信 HTTPS，Tailnet 利用受控 HTTPS 入口；具体域名证书和反向代理方案待实施核对。Alienware 既有 Tailscale Serve 443 为 CouchDB 服务的配置不能被新 Web 覆盖。PWA 推送接收不要求 Web 公网入站端口。

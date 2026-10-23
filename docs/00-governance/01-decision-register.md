@@ -37,6 +37,7 @@
 | ADR-025 | 指标分层聚合与查询 | 内建 Descriptor 的原始快照通过持久化待聚合队列一次生成 UTC 分钟、小时、日三层；聚合更新与队列确认同事务，原始清理不得越过未确认项。数值查询返回桶内有效值均值并标记 `estimated`，全缺失桶保持 `missing`；历史源按显式递增的原始/分钟/小时/日窗口拼接单一来源。周期、单轮快照数、超时和各层保留窗口均无默认值 | 2026-10-23 按推荐采用 |
 | ADR-026 | Agent 插件暂存容量 | staging 采用单包、总逻辑字节、包数和扫描条目硬边界及跨进程单写者锁；写入前按磁盘实况核算，满额拒绝且不在写入路径隐式淘汰。控制轮询按显式周期、宽限期、单轮删除量和超时清理，仅保护 Reconciler current/previous 后删除完整旧包；保护集、目录结构或扫描异常时停止本轮 | 2026-10-23 按推荐采用 |
 | ADR-027 | 插件进程基础资源边界 | Agent 生产装配必须通过独立非特权 `plugin-launcher` 在 `exec` 插件前设置硬 `RLIMIT_NOFILE`、`RLIMIT_NPROC`、`RLIMIT_FSIZE`、`RLIMIT_AS`、`RLIMIT_CPU` 和 `no_new_privs`；launcher 绝对路径与各限制值必须显式配置且无默认值。该层用于无竞态地建立基础进程边界，不宣称提供 cgroup 总量、RSS、不同 UID、文件系统或网络隔离 | 2026-10-23 按推荐采用 |
+| ADR-028 | 插件采集策略控制 | Collector 的启用、JSON 配置、采集周期和单次超时使用独立于插件制品 Desired State 的 Collection Policy；按 device/plugin/collector 独立单调修订并原子审计，不提供隐式采样参数。启用策略必须绑定已启用的具体插件 Desired Revision 且 Collector 存在于对应签名 Manifest，避免旧配置静默应用到升级后的 Collector；Server 要求显式每设备策略数量上限，单份 JSON 配置使用 64 KiB 协议硬上限 | 2026-10-23 用户确认采用推荐方案 |
 
 ## 根据「全部按推荐」授权纳入基线、尚未逐项单独确认
 | ID | 领域 | 推荐基线 | 状态 |

@@ -8,6 +8,9 @@
 HTTPS + Agent 主动轮询。数据平面使用限额批量 POST；控制平面提供期望状态查询及实际状态确认；制品采用按需认证下载。插件 ↔ Plugin Host 使用已经明确确认的 gRPC over Unix Socket，二者是不同协议层。
 
 ## 控制平面对象
+
+插件包 Desired State 只管理制品启停、版本和回滚。Collection Policy 独立按 device/plugin/collector 修订，显式携带启用状态、绑定的插件 Desired Revision、采集周期、单次超时及最多 64 KiB 的 JSON 配置。启用策略只有在绑定 Revision 当前启用且 Collector 存在于对应签名 Manifest 时才可发布；禁用策略不保留运行参数。Server 启动时必须显式给出每设备策略数量上限，达到上限拒绝新键但允许更新已有键。策略调整不会推进插件包 Revision、解除插件隔离或自动改变其他采集器频率。
+
 | 字段 | 意义 |
 |---|---|
 | desired_revision | Server 期望配置单调版本 |
@@ -24,6 +27,7 @@ HTTPS + Agent 主动轮询。数据平面使用限额批量 POST；控制平面�
 3. 对插件升级执行下载、校验、预备、激活、健康观察、提交或回滚；对不兼容配置拒绝执行。
 4. Agent 回报 `observed_revision` 与 `applied_revision`，Server 保留不一致状态和审计，不能将发送成功当作生效成功。
 5. 期望状态重复出现应幂等，不重复下载或重启插件；旧响应不能覆盖新版本。
+6. Agent 只为与实际 Applied Revision 相同的已启用 Collection Policy 构建采集任务；不匹配的策略保持未应用，不能猜测迁移配置。
 
 ## 通道职责
 | 通道 | 请求语义 | 保护 |

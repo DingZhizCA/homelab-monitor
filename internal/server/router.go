@@ -13,17 +13,18 @@ import (
 
 // RouterOptions contains already-constructed application handlers for routing.
 type RouterOptions struct {
-	API             *Handler
-	PluginControl   *PluginControlHandler
-	PluginArtifacts *PluginArtifactHandler
-	PluginAdmin     *PluginAdminHandler
-	Auth            *AuthHandler
-	Dashboards      *DashboardHandler
-	MetricQueries   *MetricQueryHandler
-	MetricHistory   *MetricHistoryHandler
-	MetricsBatch    *MetricsBatchHandler
-	AlertRules      *AlertRuleHandler
-	WebDirectory    string
+	API                *Handler
+	PluginControl      *PluginControlHandler
+	PluginArtifacts    *PluginArtifactHandler
+	PluginAdmin        *PluginAdminHandler
+	CollectionPolicies *PluginCollectionPolicyHandler
+	Auth               *AuthHandler
+	Dashboards         *DashboardHandler
+	MetricQueries      *MetricQueryHandler
+	MetricHistory      *MetricHistoryHandler
+	MetricsBatch       *MetricsBatchHandler
+	AlertRules         *AlertRuleHandler
+	WebDirectory       string
 }
 
 // NewRouter registers the stable HTTP API and an optional Dashboard handler.
@@ -33,6 +34,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.PluginAdmin != nil && options.Auth == nil {
 		return nil, errors.New("plugin desired-state administration requires human authentication")
+	}
+	if options.CollectionPolicies != nil && options.Auth == nil {
+		return nil, errors.New("plugin collection-policy administration requires human authentication")
 	}
 	if options.Dashboards != nil && (options.Auth == nil || options.Dashboards.auth != options.Auth) {
 		return nil, errors.New("Dashboard routes require the matching human authentication handler")
@@ -75,11 +79,17 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 		mux.HandleFunc("/api/v1/agent/plugins/desired", options.PluginControl.Desired)
 		mux.HandleFunc("/api/v1/agent/plugins/reported", options.PluginControl.Reported)
 	}
+	if options.CollectionPolicies != nil {
+		mux.HandleFunc("/api/v1/agent/plugins/collection-policies", options.CollectionPolicies.Desired)
+	}
 	if options.PluginArtifacts != nil {
 		mux.HandleFunc("/api/v1/agent/plugins/artifact", options.PluginArtifacts.Download)
 	}
 	if options.PluginAdmin != nil && options.Auth != nil {
 		mux.Handle("/api/v1/owner/plugins/desired", options.Auth.RequireOwnerMutation(http.HandlerFunc(options.PluginAdmin.SetDesired)))
+	}
+	if options.CollectionPolicies != nil && options.Auth != nil {
+		mux.Handle("/api/v1/owner/plugins/collection-policies", options.Auth.RequireOwnerMutation(http.HandlerFunc(options.CollectionPolicies.SetDesired)))
 	}
 	if options.Dashboards != nil {
 		mux.HandleFunc("/api/v1/dashboards", options.Dashboards.Collection)

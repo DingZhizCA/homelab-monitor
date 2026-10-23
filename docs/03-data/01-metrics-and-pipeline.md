@@ -37,7 +37,7 @@ Counter 先计算两个连续有效快照之间的增量，识别设备重启、
 
 当前实现使用 `MetricEnvelope` v1 接收 Agent 快照；`internal/dashboard` 的内建 Descriptor Registry 只映射现有 CPU、内存、系统负载、磁盘容量和接口速率字段。可选 `/api/v1/dashboard/metrics/descriptors` 与 `/api/v1/dashboard/metrics/latest` HTTP Handler 读取 Server 当前快照，授权发生在快照读取之前。缺少磁盘容量或接口样本会保留为 `missing`，过期设备结果标记为 `stale`；查询只读最新快照，不启动设备采样。`internal/dashboard.HistoryService` 与 `/api/v1/dashboard/metrics/history` HTTPS Handler 提供存储无关的历史查询边界：请求先校验显式配置的范围与点数预算并完成授权，再访问历史源；返回点必须属于请求设备、Descriptor 和半开时间范围。`storage.MetricHistorySource` 可读取原始快照，或按显式年龄窗口依次拼接日、小时、分钟和原始层，并复用同一 Descriptor Registry。聚合点返回桶内有效数值均值并标记 `estimated`；没有有效值的已存在序列保持 `missing`。ADR-020 允许有效 Owner 与 Viewer Session 读取这些现有内建指标。`cmd/server` 在完整显式配置 HTTPS、存储、Origin、Session、限速与历史预算时装配当前值和历史路由；查询不触发采样。更细粒度 ACL 仍未实施。
 
-插件侧当前增加独立 `metrics.PluginObservation` schema v1 与 Agent `NormalizePluginObservation` 适配器。适配器从已验证的 Collector Descriptor 和 CollectResult 生成带设备、插件版本、Collector、实际观测时间、类型、单位、质量、标签和值的规范化消息，并复制 RPC 数据；它不改变 `MetricEnvelope` v1、不触发采样、不排队或上报。通用 Server ingestion、幂等键、存储和历史查询映射仍未实现，待数据保留和存储策略确定后再接入。
+插件侧当前有独立 `metrics.PluginObservation` schema v1 与 Agent `NormalizePluginObservation` 适配器。适配器从已验证的 Collector Descriptor 和 CollectResult 生成带设备、插件版本、Collector、实际观测时间、类型、单位、质量、标签和值的规范化消息，并复制 RPC 数据；它不改变 `MetricEnvelope` v1。独立 Collection Policy 控制面已持久化显式周期、超时和 JSON 配置，并通过插件 Revision 防止配置跨版本静默复用，但 Agent 尚未据此调度、排队或上报。插件观测的 Server ingestion、幂等键、存储、聚合和历史查询映射仍未实现。
 
 规范化消息在进入后续适配器前会再次检查稳定的插件/Collector/Metric/标签标识、受支持的类型与质量、UTF-8 标签及 JSON 值，并用完整标签键值组合区分同一指标的多个序列。
 

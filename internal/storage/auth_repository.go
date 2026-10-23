@@ -131,6 +131,24 @@ var coreMigrations = []Migration{
 	);
 	CREATE INDEX incident_states_device ON incident_states (device_id, rule_id);`,
 	},
+	{
+		Version: 6,
+		Name:    "plugin_collection_policies",
+		SQL: `CREATE TABLE plugin_collection_policies (
+		device_id TEXT NOT NULL,
+		plugin_id TEXT NOT NULL,
+		collector_id TEXT NOT NULL,
+		revision INTEGER NOT NULL CHECK (revision > 0),
+		plugin_revision INTEGER NOT NULL CHECK (plugin_revision >= 0),
+		enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+		interval_seconds INTEGER NOT NULL CHECK (interval_seconds >= 0),
+		timeout_milliseconds INTEGER NOT NULL CHECK (timeout_milliseconds >= 0),
+		config_json BLOB NOT NULL,
+		PRIMARY KEY (device_id, plugin_id, collector_id)
+	);
+	CREATE INDEX plugin_collection_policy_device
+		ON plugin_collection_policies (device_id, plugin_id, collector_id);`,
+	},
 }
 
 // AuthRepository implements the auth user and session persistence boundaries.

@@ -5,9 +5,9 @@
 > **说明**：技术参数的具体默认数值需要在模块实施时验证；本文不构成现网变更指令。
 
 ## 本地职责划分
-Server Plugin Manager 管理期望版本；Agent Reconciler 管理本地期望/实际对账、健康检查和配置化失败退避/隔离；Supervisor 管理单个进程的启动与关闭；Scheduler 管理调用方提供的采集批次、并发与 Deadline；Runtime 负责本机 Unix Socket/gRPC。OS 级 CPU、内存、文件和网络资源隔离仍由尚未实现的 Resource Guard 负责。
+Server Plugin Manager 管理期望版本；Agent Reconciler 管理本地期望/实际对账、健康检查和配置化失败退避/隔离；Supervisor 管理单个进程的启动与关闭；Scheduler 管理调用方提供的采集批次、并发与 Deadline；Runtime 负责本机 Unix Socket/gRPC。专用 launcher 已提供基础硬 rlimit 与 `no_new_privs`；cgroup 进程树总量、RSS、不同 UID、文件系统、系统调用和网络隔离仍未实现。
 
-`PluginScheduler.CollectBatch` 在同一 Scheduler 实例的并发批次间共享并发上限，并对每个 outcome 一并捕获插件 ID、包版本和对应 Collector Descriptor。Agent 可将成功 outcome 交给 `NormalizePluginOutcome`，在不让插件域依赖指标域的情况下生成规范化观测；单个任务错误仍隔离在对应 outcome。该适配结果当前没有接入网络发送或 Server 持久化。
+`PluginScheduler.CollectBatch` 在同一 Scheduler 实例的并发批次间共享并发上限，并对每个 outcome 一并捕获插件 ID、包版本和对应 Collector Descriptor。Agent 可将成功 outcome 交给 `NormalizePluginOutcome`，在不让插件域依赖指标域的情况下生成规范化观测；单个任务错误仍隔离在对应 outcome。Server 已持久化独立 Collection Policy，并向设备认证的 Agent 提供严格有界读取；策略显式给出周期、超时、JSON 配置并绑定插件 Revision。Agent 调度器尚未消费该策略，规范化结果也尚未接入网络发送或 Server 指标持久化。
 
 ## 进程与权限
 - 每个插件包作为独立进程启动，不共享 Agent 地址空间。进程崩溃最多使其 Collector 不可用。

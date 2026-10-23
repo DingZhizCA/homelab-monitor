@@ -19,8 +19,22 @@ import (
 
 // PluginRepository implements durable plugin control-plane state.
 type PluginRepository struct {
-	database   *sql.DB
-	writeToken chan struct{}
+	database              *sql.DB
+	writeToken            chan struct{}
+	maxCollectionPolicies int
+}
+
+// NewBoundedPluginRepository enables collection policies with a per-device row limit.
+func NewBoundedPluginRepository(database *sql.DB, maxCollectionPolicies int) (*PluginRepository, error) {
+	if maxCollectionPolicies < 1 {
+		return nil, errors.New("positive collection policy capacity is required")
+	}
+	repository, err := NewPluginRepository(database)
+	if err != nil {
+		return nil, err
+	}
+	repository.maxCollectionPolicies = maxCollectionPolicies
+	return repository, nil
 }
 
 // NewPluginRepository binds plugin state to core.db.
@@ -121,6 +135,101 @@ func (r *PluginRepository) DesiredArtifactKeysContext(ctx context.Context) ([]pl
 		return nil, fmt.Errorf("iterate desired plugin artifacts: %w", err)
 	}
 	return keys, nil
+}
+
+// SetCollectionPolicyWithAuditContext atomically publishes one collector policy revision.
+func (r *PluginRepository) SetCollectionPolicyWithAuditContext(ctx context.Context, policy plugins.CollectionPolicy, event audit.Event) error {
+	if r.maxCollectionPolicies < 1 {
+		return errors.New("collection policy storage requires an explicit capacity")
+	}
+	if err := plugins.ValidateCollectionPolicyMutation(policy, event); err != nil {
+		return err
+	}
+	return r.withWrite(ctx, func(transaction *sql.Tx) error {
+		if err := requireActiveOwner(ctx, transaction, event.ActorID); err != nil {
+			return err
+		}
+		current, exists, err := readCollectionPolicy(ctx, transaction, policy.DeviceID, policy.PluginID, policy.CollectorID)
+		if err != nil {
+			return err
+		}
+		if exists && policy.Revision < current.Revision {
+			return fmt.Errorf("%w: collection policy revision %d is older than current revision %d", plugins.ErrStateConflict, policy.Revision, current.Revision)
+		}
+		if exists && policy.Revision == current.Revision {
+			if !plugins.EqualCollectionPolicy(policy, current) {
+				return fmt.Errorf("%w: collection policy revision %d conflicts with current state", plugins.ErrStateConflict, policy.Revision)
+			}
+			return nil
+		}
+		if policy.Enabled {
+			var desiredRevision uint64
+			var desiredEnabled int
+			err := transaction.QueryRowContext(ctx, `SELECT revision, enabled FROM plugin_desired_states WHERE device_id = ? AND plugin_id = ?`, policy.DeviceID, policy.PluginID).Scan(&desiredRevision, &desiredEnabled)
+			if err != nil || desiredEnabled != 1 || desiredRevision != policy.PluginRevision {
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return fmt.Errorf("read collection policy plugin target: %w", err)
+				}
+				return plugins.ErrCollectionTargetUnavailable
+			}
+		}
+		if !exists {
+			var count int
+			if err := transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM plugin_collection_policies WHERE device_id = ?`, policy.DeviceID).Scan(&count); err != nil {
+				return fmt.Errorf("count plugin collection policies: %w", err)
+			}
+			if count >= r.maxCollectionPolicies {
+				return plugins.ErrCollectionPolicyCapacity
+			}
+		}
+		enabled := 0
+		if policy.Enabled {
+			enabled = 1
+		}
+		if _, err := transaction.ExecContext(ctx, `INSERT INTO plugin_collection_policies
+			(device_id, plugin_id, collector_id, revision, plugin_revision, enabled, interval_seconds, timeout_milliseconds, config_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(device_id, plugin_id, collector_id) DO UPDATE SET revision=excluded.revision,
+				plugin_revision=excluded.plugin_revision, enabled=excluded.enabled, interval_seconds=excluded.interval_seconds,
+				timeout_milliseconds=excluded.timeout_milliseconds, config_json=excluded.config_json`,
+			policy.DeviceID, policy.PluginID, policy.CollectorID, policy.Revision, policy.PluginRevision, enabled,
+			policy.IntervalSeconds, policy.TimeoutMilliseconds, []byte(policy.Config)); err != nil {
+			return fmt.Errorf("store plugin collection policy: %w", err)
+		}
+		return insertAuditEvent(ctx, transaction, event)
+	})
+}
+
+// CollectionPoliciesForDeviceContext returns policies in stable plugin/collector order.
+func (r *PluginRepository) CollectionPoliciesForDeviceContext(ctx context.Context, deviceID string) ([]plugins.CollectionPolicy, error) {
+	if r.maxCollectionPolicies < 1 {
+		return nil, errors.New("collection policy storage requires an explicit capacity")
+	}
+	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID {
+		return nil, errors.New("trimmed device ID is required")
+	}
+	rows, err := r.database.QueryContext(ctx, `SELECT device_id, plugin_id, collector_id, revision, plugin_revision, enabled,
+		interval_seconds, timeout_milliseconds, config_json FROM plugin_collection_policies
+		WHERE device_id = ? ORDER BY plugin_id, collector_id`, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("query plugin collection policies: %w", err)
+	}
+	defer rows.Close()
+	policies := make([]plugins.CollectionPolicy, 0)
+	for rows.Next() {
+		policy, err := scanCollectionPolicy(rows)
+		if err != nil {
+			return nil, err
+		}
+		policies = append(policies, policy)
+		if len(policies) > r.maxCollectionPolicies {
+			return nil, plugins.ErrCollectionPolicyCapacity
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate plugin collection policies: %w", err)
+	}
+	return policies, nil
 }
 
 // SetReportedBatchContext atomically stores a validated Agent report batch.
@@ -225,6 +334,36 @@ func scanDesiredState(row rowScanner) (plugins.DesiredState, error) {
 		return plugins.DesiredState{}, fmt.Errorf("validate stored plugin desired state: %w", err)
 	}
 	return state, nil
+}
+
+func readCollectionPolicy(ctx context.Context, transaction *sql.Tx, deviceID, pluginID, collectorID string) (plugins.CollectionPolicy, bool, error) {
+	row := transaction.QueryRowContext(ctx, `SELECT device_id, plugin_id, collector_id, revision, plugin_revision, enabled,
+		interval_seconds, timeout_milliseconds, config_json FROM plugin_collection_policies
+		WHERE device_id = ? AND plugin_id = ? AND collector_id = ?`, deviceID, pluginID, collectorID)
+	policy, err := scanCollectionPolicy(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return plugins.CollectionPolicy{}, false, nil
+	}
+	return policy, err == nil, err
+}
+
+func scanCollectionPolicy(row rowScanner) (plugins.CollectionPolicy, error) {
+	var policy plugins.CollectionPolicy
+	var enabled int
+	var config []byte
+	if err := row.Scan(&policy.DeviceID, &policy.PluginID, &policy.CollectorID, &policy.Revision, &policy.PluginRevision, &enabled,
+		&policy.IntervalSeconds, &policy.TimeoutMilliseconds, &config); err != nil {
+		return plugins.CollectionPolicy{}, err
+	}
+	if enabled != 0 && enabled != 1 {
+		return plugins.CollectionPolicy{}, errors.New("stored plugin collection policy has invalid enabled value")
+	}
+	policy.Enabled = enabled == 1
+	policy.Config = append(policy.Config, config...)
+	if err := policy.Validate(); err != nil {
+		return plugins.CollectionPolicy{}, fmt.Errorf("validate stored plugin collection policy: %w", err)
+	}
+	return policy, nil
 }
 
 func (r *PluginRepository) withWrite(ctx context.Context, operation func(*sql.Tx) error) error {

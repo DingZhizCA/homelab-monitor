@@ -109,6 +109,54 @@ func (c *PluginControlClient) Desired(ctx context.Context, deviceID string) ([]p
 	return result.States, nil
 }
 
+// CollectionPolicies fetches independently revisioned collector schedules.
+func (c *PluginControlClient) CollectionPolicies(ctx context.Context, deviceID string) ([]plugins.CollectionPolicy, error) {
+	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID {
+		return nil, fmt.Errorf("plugin collection-policy device ID is required and must be trimmed")
+	}
+	endpoint := c.baseURL + "/api/v1/agent/plugins/collection-policies?device_id=" + url.QueryEscape(deviceID)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create plugin collection-policy request: %w", err)
+	}
+	c.authorize(request)
+	response, err := c.client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("fetch plugin collection policies: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, controlResponseError("fetch plugin collection policies", response)
+	}
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxPluginControlResponse+1))
+	if err != nil || len(responseBody) > maxPluginControlResponse {
+		return nil, fmt.Errorf("plugin collection-policy response exceeds size limit or could not be read")
+	}
+	var result struct {
+		DeviceID string                     `json:"device_id"`
+		Policies []plugins.CollectionPolicy `json:"policies"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(responseBody))
+	if err := decoder.Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode plugin collection policies: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF || result.DeviceID != deviceID {
+		return nil, fmt.Errorf("plugin collection-policy response must contain one matching device object")
+	}
+	for _, policy := range result.Policies {
+		if policy.DeviceID != deviceID {
+			return nil, fmt.Errorf("plugin collection-policy response contains another device")
+		}
+		if err := policy.Validate(); err != nil {
+			return nil, fmt.Errorf("plugin collection-policy response contains invalid policy: %w", err)
+		}
+	}
+	if result.Policies == nil {
+		result.Policies = []plugins.CollectionPolicy{}
+	}
+	return result.Policies, nil
+}
+
 // Reported submits a batch of inspected and applied plugin states.
 func (c *PluginControlClient) Reported(ctx context.Context, deviceID string, states []plugins.ReportedState) error {
 	if strings.TrimSpace(deviceID) == "" || strings.TrimSpace(deviceID) != deviceID {
