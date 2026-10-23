@@ -217,6 +217,70 @@ func TestPluginRuntimeCloseCancelsInFlightReconciliation(t *testing.T) {
 	}
 }
 
+func TestPluginRuntimeCollectionPolicyDoesNotRetryAtTickRate(t *testing.T) {
+	policy := plugins.CollectionPolicy{DeviceID: "node-a", PluginID: "health", CollectorID: "status", Revision: 1, PluginRevision: 1, Enabled: true, IntervalSeconds: 60, TimeoutMilliseconds: 1000, Config: json.RawMessage(`{}`)}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agent/plugins/desired":
+			_ = json.NewEncoder(w).Encode(map[string]any{"device_id": "node-a", "states": []plugins.DesiredState{}})
+		case "/api/v1/agent/plugins/collection-policies":
+			_ = json.NewEncoder(w).Encode(map[string]any{"device_id": "node-a", "policies": []plugins.CollectionPolicy{policy}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range []string{"staging", "runtime"} {
+		if err := os.Mkdir(filepath.Join(root, directory), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(root, "publisher.pub")
+	permissionPath := filepath.Join(root, "grants.json")
+	if err := os.WriteFile(keyPath, publicKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(permissionPath, []byte(`{"grants":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewPluginRuntime(PluginRuntimeConfig{
+		ServerURL: server.URL, DeviceID: "node-a", DeviceToken: "token", PublisherKeyPath: keyPath, PermissionFile: permissionPath,
+		StagingDirectory: filepath.Join(root, "staging"), RuntimeDirectory: filepath.Join(root, "runtime"), StateDirectory: filepath.Join(root, "state"),
+		LauncherPath: writeTestPluginLauncher(t, root), ProcessLimits: testPluginProcessLimits(), HostProtocolMajor: 1,
+		MaxArtifactBytes: 1 << 20, MaxStagingBytes: 16 << 20, MaxStagedPackages: 16, MaxStagingScanEntries: 256,
+		StagingCleanupInterval: time.Hour, StagingOrphanGrace: 24 * time.Hour, StagingCleanupLimit: 4, StagingCleanupTimeout: time.Second,
+		StagingObserver: func(StagingCleanupObservation) {}, MaxStateEntries: 16, MaxStateBytes: 1 << 20, OperationTimeout: time.Second,
+		MaxConsecutiveFailures: 3, InitialFailureBackoff: time.Second, MaxFailureBackoff: time.Minute,
+		Collection: &PluginCollectionRuntimeConfig{StateDirectory: filepath.Join(root, "queue"), MaxPolicies: 4, MaxTasksPerRun: 2, MaxConcurrent: 1, QueueLimits: testPluginQueueLimits()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.control.client = server.Client()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runtime.ReconcileOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.CollectOnce(ctx); err == nil || !strings.Contains(err.Error(), "not active") {
+		t.Fatalf("first collection error=%v", err)
+	}
+	if err := runtime.CollectOnce(ctx); err != nil {
+		t.Fatalf("same policy retried before interval: %v", err)
+	}
+	if err := runtime.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writeTestPluginLauncher(t *testing.T, directory string) string {
 	t.Helper()
 	path := filepath.Join(directory, "plugin-launcher")

@@ -46,8 +46,8 @@ func TestPluginSchedulerKeepsBatchOrderAndIsolatesFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	tasks := []CollectionTask{
-		{Plugin: plugin, CollectorID: "network.flow", Config: json.RawMessage(`{}`)},
-		{Plugin: plugin, CollectorID: "missing.collector", Config: json.RawMessage(`{}`)},
+		{Plugin: plugin, CollectorID: "network.flow", Config: json.RawMessage(`{}`), Timeout: time.Second},
+		{Plugin: plugin, CollectorID: "missing.collector", Config: json.RawMessage(`{}`), Timeout: time.Second},
 	}
 	outcomes, err := scheduler.CollectBatch(ctx, tasks)
 	if err != nil {
@@ -103,7 +103,7 @@ func TestPluginSchedulerCapsConcurrencyAcrossConcurrentBatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task := []CollectionTask{{Plugin: prepared, CollectorID: "network.flow", Config: json.RawMessage(`{}`)}}
+	task := []CollectionTask{{Plugin: prepared, CollectorID: "network.flow", Config: json.RawMessage(`{}`), Timeout: time.Second}}
 	results := make(chan error, 2)
 	go func() { _, err := scheduler.CollectBatch(ctx, task); results <- err }()
 	select {

@@ -22,6 +22,22 @@ metrics_batch:
   # max_batch_snapshots: <positive count not greater than queue capacity>
   # max_body_bytes: <positive request byte limit>
 
+plugin_metrics:
+  # Requires plugins.enabled and the Server plugin metric batch endpoint.
+  enabled: false
+  # state_directory: "/var/lib/homelab-monitor-agent/plugin-metrics-queue"
+  # tick_interval: "10s"
+  # tick_timeout: "30s"
+  # max_policies: <positive policy count>
+  # max_tasks_per_run: <positive count not greater than max_policies>
+  # max_concurrent: <positive count not greater than max_tasks_per_run>
+  # max_queued_observations: <positive count>
+  # max_queued_samples: <positive total sample count>
+  # max_queued_bytes: <positive byte limit>
+  # max_batch_observations: <positive count not greater than queue capacity>
+  # max_batch_samples: <positive count not greater than queue capacity>
+  # max_body_bytes: <positive request byte limit>
+
 collectors:
   cpu: true
   memory: true

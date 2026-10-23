@@ -96,6 +96,18 @@ func main() {
 	defer stop()
 	var pluginRuntime *agentpkg.PluginRuntime
 	if config.Plugins.Enabled {
+		var collectionConfig *agentpkg.PluginCollectionRuntimeConfig
+		if config.PluginMetrics.Enabled {
+			collectionConfig = &agentpkg.PluginCollectionRuntimeConfig{
+				StateDirectory: config.PluginMetrics.StateDirectory, MaxPolicies: config.PluginMetrics.MaxPolicies,
+				MaxTasksPerRun: config.PluginMetrics.MaxTasksPerRun, MaxConcurrent: config.PluginMetrics.MaxConcurrent,
+				QueueLimits: agentpkg.PluginBatchQueueLimits{
+					MaxQueuedObservations: config.PluginMetrics.MaxQueuedObservations, MaxQueuedSamples: config.PluginMetrics.MaxQueuedSamples,
+					MaxQueuedBytes: config.PluginMetrics.MaxQueuedBytes, MaxBatchObservations: config.PluginMetrics.MaxBatchObservations,
+					MaxBatchSamples: config.PluginMetrics.MaxBatchSamples, MaxBatchBodyBytes: config.PluginMetrics.MaxBodyBytes,
+				},
+			}
+		}
 		pluginRuntime, err = agentpkg.NewPluginRuntime(agentpkg.PluginRuntimeConfig{
 			ServerURL: config.Server.URL, DeviceID: config.Agent.DeviceID, DeviceToken: config.Server.Token,
 			PublisherKeyPath: config.Plugins.PublisherKeyPath, PermissionFile: config.Plugins.PermissionFile,
@@ -119,11 +131,15 @@ func main() {
 			MaxConsecutiveFailures: config.Plugins.MaxConsecutiveFailures,
 			InitialFailureBackoff:  config.Plugins.InitialFailureBackoff.Duration,
 			MaxFailureBackoff:      config.Plugins.MaxFailureBackoff.Duration,
+			Collection:             collectionConfig,
 		})
 		if err != nil {
 			log.Fatalf("component=agent level=ERROR msg=%q", err)
 		}
 		go pluginControlLoop(ctx, pluginRuntime, config.Plugins.PollInterval.Duration, config.Plugins.OperationTimeout.Duration)
+		if config.PluginMetrics.Enabled {
+			go pluginCollectionLoop(ctx, pluginRuntime, config.PluginMetrics.TickInterval.Duration, config.PluginMetrics.TickTimeout.Duration)
+		}
 		defer func() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), config.Plugins.OperationTimeout.Duration)
 			defer cancel()
@@ -179,6 +195,31 @@ func logStagingCleanup(observation agentpkg.StagingCleanupObservation) {
 
 type pluginControlRunner interface {
 	ReconcileOnce(context.Context) error
+}
+
+type pluginCollectionRunner interface {
+	CollectOnce(context.Context) error
+}
+
+func pluginCollectionLoop(ctx context.Context, runtime pluginCollectionRunner, tickInterval, tickTimeout time.Duration) {
+	timer := time.NewTimer(tickInterval)
+	defer timer.Stop()
+	var lastError time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		operationCtx, cancel := context.WithTimeout(ctx, tickTimeout)
+		err := runtime.CollectOnce(operationCtx)
+		cancel()
+		if err != nil && (lastError.IsZero() || time.Since(lastError) >= errorLogInterval) {
+			log.Printf("component=agent-plugin-metrics level=WARN msg=%q", err)
+			lastError = time.Now()
+		}
+		timer.Reset(tickInterval)
+	}
 }
 
 func pluginControlLoop(ctx context.Context, runtime pluginControlRunner, pollInterval, operationTimeout time.Duration) {

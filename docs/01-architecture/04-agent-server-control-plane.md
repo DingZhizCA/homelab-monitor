@@ -9,7 +9,7 @@ HTTPS + Agent 主动轮询。数据平面使用限额批量 POST；控制平面�
 
 ## 控制平面对象
 
-插件包 Desired State 只管理制品启停、版本和回滚。Collection Policy 独立按 device/plugin/collector 修订，显式携带启用状态、绑定的插件 Desired Revision、采集周期、单次超时及最多 64 KiB 的 JSON 配置。启用策略只有在绑定 Revision 当前启用且 Collector 存在于对应签名 Manifest 时才可发布；禁用策略不保留运行参数。Server 启动时必须显式给出每设备策略数量上限，达到上限拒绝新键但允许更新已有键。策略调整不会推进插件包 Revision、解除插件隔离或自动改变其他采集器频率。
+插件包 Desired State 只管理制品启停、版本和回滚。Collection Policy 独立按 device/plugin/collector 修订，显式携带启用状态、绑定的插件 Desired Revision、采集周期、单次超时及最多 64 KiB 的 JSON 配置。启用策略只有在绑定 Revision 当前启用且 Collector 存在于对应签名 Manifest 时才可发布；禁用策略不保留运行参数。Server 启动时必须显式给出每设备策略数量上限，达到上限拒绝新键但允许更新已有键。策略调整不会推进插件包 Revision、解除插件隔离或自动改变其他采集器频率。Agent 的插件观测循环使用独立显式 tick 和总超时，按策略自身周期与超时运行；策略总数、单轮任务数和总并发受本地硬限制。到期尝试失败或目标不可用也记录本次尝试时间，不会按 tick 加速重试。规范化成功结果先写入独立有界原子队列，再以固定 pending ID 发送到插件观测批次端点。
 
 | 字段 | 意义 |
 |---|---|

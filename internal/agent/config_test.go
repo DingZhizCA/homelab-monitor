@@ -118,6 +118,58 @@ func TestLoadConfigRequiresExplicitSecurePluginRuntimeSettings(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRequiresBoundedPluginMetricsWithPluginRuntime(t *testing.T) {
+	directory := testutil.TempDir(t)
+	base := "server:\n  url: https://server.example\n  token: device-token\nagent:\n  device_id: n1\n  display_name: N1\nplugin_metrics:\n  enabled: true\n  state_directory: " + filepath.Join(directory, "plugin-metrics") + "\n  tick_interval: 10s\n  tick_timeout: 30s\n  max_policies: 16\n  max_tasks_per_run: 4\n  max_concurrent: 2\n  max_queued_observations: 32\n  max_queued_samples: 128\n  max_queued_bytes: 1048576\n  max_batch_observations: 8\n  max_batch_samples: 32\n  max_body_bytes: 262144\nplugins:\n  enabled: false\n"
+	path := filepath.Join(directory, "agent.yaml")
+	if err := os.WriteFile(path, []byte(base), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("plugin metrics without plugin runtime were accepted")
+	}
+	// The full plugin-runtime fixture is covered separately; this verifies that
+	// collection-specific limits are all required once collection is selected.
+	config := Config{}
+	config.Server.URL = "https://server.example"
+	config.Server.Token = "token"
+	config.Agent.DeviceID = "n1"
+	config.Agent.DisplayName = "N1"
+	config.Agent.Interval.Duration = time.Second
+	config.Monitoring.ActiveInterval.Duration = time.Second
+	config.Monitoring.IdleInterval.Duration = time.Minute
+	config.Collectors.CPU = boolPointer(true)
+	config.Collectors.Memory = boolPointer(true)
+	config.Collectors.SensorInterval.Duration = time.Minute
+	config.Collectors.DiskInterval.Duration = time.Minute
+	config.Collectors.PowerInterval.Duration = time.Minute
+	config.Plugins.Enabled = true
+	config.PluginMetrics.Enabled = true
+	config.PluginMetrics.StateDirectory = filepath.Join(directory, "plugin-metrics")
+	config.PluginMetrics.TickInterval.Duration = time.Second
+	config.PluginMetrics.TickTimeout.Duration = time.Second
+	config.PluginMetrics.MaxPolicies = 4
+	config.PluginMetrics.MaxTasksPerRun = 2
+	config.PluginMetrics.MaxConcurrent = 1
+	config.PluginMetrics.MaxQueuedObservations = 4
+	config.PluginMetrics.MaxQueuedSamples = 8
+	config.PluginMetrics.MaxQueuedBytes = 4096
+	config.PluginMetrics.MaxBatchObservations = 2
+	config.PluginMetrics.MaxBatchSamples = 4
+	config.PluginMetrics.MaxBodyBytes = 2048
+	// Validation proceeds into the independently tested plugin settings only
+	// after accepting this complete collection block.
+	if err := config.Validate(); err == nil || strings.Contains(err.Error(), "plugin_metrics") {
+		t.Fatalf("complete plugin metrics block error=%v", err)
+	}
+	config.PluginMetrics.MaxConcurrent = 3
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "plugin_metrics") {
+		t.Fatalf("invalid plugin metrics concurrency error=%v", err)
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
+
 func TestLoadConfigRejectsDisabledRequiredCollector(t *testing.T) {
 	path := filepath.Join(testutil.TempDir(t), "agent.yaml")
 	data := []byte("server:\n  url: http://127.0.0.1:8080\nagent:\n  device_id: n1\n  display_name: N1\ncollectors:\n  cpu: false\n")

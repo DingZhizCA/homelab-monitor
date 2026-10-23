@@ -57,6 +57,21 @@ type Config struct {
 		MaxBatchSnapshots  int    `yaml:"max_batch_snapshots"`
 		MaxBodyBytes       int64  `yaml:"max_body_bytes"`
 	} `yaml:"metrics_batch"`
+	PluginMetrics struct {
+		Enabled               bool     `yaml:"enabled"`
+		StateDirectory        string   `yaml:"state_directory"`
+		TickInterval          Duration `yaml:"tick_interval"`
+		TickTimeout           Duration `yaml:"tick_timeout"`
+		MaxPolicies           int      `yaml:"max_policies"`
+		MaxTasksPerRun        int      `yaml:"max_tasks_per_run"`
+		MaxConcurrent         int      `yaml:"max_concurrent"`
+		MaxQueuedObservations int      `yaml:"max_queued_observations"`
+		MaxQueuedSamples      int      `yaml:"max_queued_samples"`
+		MaxQueuedBytes        int64    `yaml:"max_queued_bytes"`
+		MaxBatchObservations  int      `yaml:"max_batch_observations"`
+		MaxBatchSamples       int      `yaml:"max_batch_samples"`
+		MaxBodyBytes          int64    `yaml:"max_body_bytes"`
+	} `yaml:"plugin_metrics"`
 	Collectors struct {
 		CPU     *bool `yaml:"cpu"`
 		Memory  *bool `yaml:"memory"`
@@ -174,6 +189,17 @@ func (c Config) Validate() error {
 		}
 		if c.MetricsBatch.MaxBatchSnapshots > c.MetricsBatch.MaxQueuedSnapshots {
 			return fmt.Errorf("metrics_batch.max_batch_snapshots cannot exceed max_queued_snapshots")
+		}
+	}
+	if c.PluginMetrics.Enabled {
+		if !c.Plugins.Enabled {
+			return fmt.Errorf("plugin_metrics.enabled requires plugins.enabled")
+		}
+		if !filepath.IsAbs(c.PluginMetrics.StateDirectory) {
+			return fmt.Errorf("plugin_metrics.state_directory must be an absolute path")
+		}
+		if c.PluginMetrics.TickInterval.Duration <= 0 || c.PluginMetrics.TickTimeout.Duration <= 0 || c.PluginMetrics.MaxPolicies < 1 || c.PluginMetrics.MaxTasksPerRun < 1 || c.PluginMetrics.MaxTasksPerRun > c.PluginMetrics.MaxPolicies || c.PluginMetrics.MaxConcurrent < 1 || c.PluginMetrics.MaxConcurrent > c.PluginMetrics.MaxTasksPerRun || c.PluginMetrics.MaxQueuedObservations < 1 || c.PluginMetrics.MaxQueuedSamples < 1 || c.PluginMetrics.MaxQueuedBytes < 1 || c.PluginMetrics.MaxBatchObservations < 1 || c.PluginMetrics.MaxBatchObservations > c.PluginMetrics.MaxQueuedObservations || c.PluginMetrics.MaxBatchSamples < 1 || c.PluginMetrics.MaxBatchSamples > c.PluginMetrics.MaxQueuedSamples || c.PluginMetrics.MaxBodyBytes < 1 {
+			return fmt.Errorf("plugin_metrics requires explicit positive scheduling, policy, concurrency, queue, batch, and body limits")
 		}
 	}
 	if !enabled(c.Collectors.CPU) || !enabled(c.Collectors.Memory) {

@@ -545,6 +545,19 @@ func (r *Reconciler) ProtectedPackagePaths() map[string]struct{} {
 	return protected
 }
 
+// CollectionTarget returns the active concrete plugin bound to one desired revision.
+// The caller must serialize this reference with reconciliation and shutdown.
+func (r *Reconciler) CollectionTarget(pluginID string, revision uint64) (*PreparedPlugin, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	active, ok := r.active[pluginID]
+	if !ok || active.appliedRevision != revision {
+		return nil, false
+	}
+	prepared, ok := active.process.(*PreparedPlugin)
+	return prepared, ok
+}
+
 func versionCheckpoint(staged StagedPackage, revision uint64) *PluginVersionCheckpoint {
 	return &PluginVersionCheckpoint{Package: staged, AppliedRevision: revision}
 }

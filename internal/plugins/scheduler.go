@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // CollectionTask describes one plugin collector invocation in a caller-owned batch.
@@ -20,6 +21,7 @@ type CollectionTask struct {
 	Plugin      *PreparedPlugin
 	CollectorID string
 	Config      json.RawMessage
+	Timeout     time.Duration
 }
 
 // CollectionOutcome preserves each task's result or error without failing its peers.
@@ -54,8 +56,8 @@ func (s *PluginScheduler) CollectBatch(ctx context.Context, tasks []CollectionTa
 	outcomes := make([]CollectionOutcome, len(tasks))
 	batch := make([]CollectionTask, len(tasks))
 	for i, task := range tasks {
-		if task.Plugin == nil || task.CollectorID == "" || !json.Valid(task.Config) {
-			return nil, fmt.Errorf("collection task %d requires a plugin, collector ID, and valid JSON config", i)
+		if task.Plugin == nil || task.CollectorID == "" || !json.Valid(task.Config) || task.Timeout <= 0 {
+			return nil, fmt.Errorf("collection task %d requires a plugin, collector ID, valid JSON config, and positive timeout", i)
 		}
 		outcomes[i] = CollectionOutcome{
 			PluginID:      task.Plugin.Package.Manifest.PluginID,
@@ -88,7 +90,9 @@ func (s *PluginScheduler) CollectBatch(ctx context.Context, tasks []CollectionTa
 					continue
 				}
 				task := batch[index]
-				result, err := task.Plugin.Collect(ctx, CollectRequest{CollectorID: task.CollectorID, Config: task.Config})
+				collectCtx, cancel := context.WithTimeout(ctx, task.Timeout)
+				result, err := task.Plugin.Collect(collectCtx, CollectRequest{CollectorID: task.CollectorID, Config: task.Config})
+				cancel()
 				outcomes[index].Result = result
 				outcomes[index].Err = err
 				<-s.slots

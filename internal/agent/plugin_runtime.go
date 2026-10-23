@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,16 @@ type PluginRuntimeConfig struct {
 	MaxConsecutiveFailures uint32
 	InitialFailureBackoff  time.Duration
 	MaxFailureBackoff      time.Duration
+	Collection             *PluginCollectionRuntimeConfig
+}
+
+// PluginCollectionRuntimeConfig enables independent policy scheduling and delivery.
+type PluginCollectionRuntimeConfig struct {
+	StateDirectory string
+	MaxPolicies    int
+	MaxTasksPerRun int
+	MaxConcurrent  int
+	QueueLimits    PluginBatchQueueLimits
 }
 
 // StagingCleanupObservation reports one Agent staging cleanup pass.
@@ -74,8 +85,8 @@ type PluginRuntime struct {
 	stateStore      *pluginReconcilerFileStore
 	closing         bool
 	closed          bool
-	reconcileCancel context.CancelFunc
-	reconcileDone   chan struct{}
+	operationCancel context.CancelFunc
+	operationDone   chan struct{}
 	cleanupInterval time.Duration
 	orphanGrace     time.Duration
 	cleanupLimit    int
@@ -83,6 +94,17 @@ type PluginRuntime struct {
 	cleanupObserver StagingCleanupObserver
 	lastCleanup     time.Time
 	now             func() time.Time
+	collection      *pluginCollectionRuntime
+}
+
+type pluginCollectionRuntime struct {
+	scheduler   *plugins.PluginScheduler
+	queue       *PluginBatchQueue
+	sender      *Sender
+	maxPolicies int
+	maxTasks    int
+	policies    []plugins.CollectionPolicy
+	lastAttempt map[string]time.Time
 }
 
 // NewPluginRuntime assembles plugin control only from explicit trust and resource settings.
@@ -138,11 +160,33 @@ func NewPluginRuntime(config PluginRuntimeConfig) (*PluginRuntime, error) {
 		_ = stager.Close()
 		return nil, fmt.Errorf("configure plugin reconciler: %w", err)
 	}
+	var collection *pluginCollectionRuntime
+	if config.Collection != nil {
+		collectionConfig := config.Collection
+		if !filepath.IsAbs(collectionConfig.StateDirectory) || collectionConfig.MaxPolicies < 1 || collectionConfig.MaxTasksPerRun < 1 || collectionConfig.MaxTasksPerRun > collectionConfig.MaxPolicies || collectionConfig.MaxConcurrent < 1 || collectionConfig.MaxConcurrent > collectionConfig.MaxTasksPerRun {
+			_ = stateStore.Close()
+			_ = stager.Close()
+			return nil, errors.New("plugin collection requires an absolute queue directory and positive policy, task, and concurrency limits")
+		}
+		scheduler, err := plugins.NewPluginScheduler(collectionConfig.MaxConcurrent)
+		if err != nil {
+			_ = stateStore.Close()
+			_ = stager.Close()
+			return nil, err
+		}
+		queue, err := OpenPluginBatchQueue(collectionConfig.StateDirectory, config.DeviceID, collectionConfig.QueueLimits)
+		if err != nil {
+			_ = stateStore.Close()
+			_ = stager.Close()
+			return nil, fmt.Errorf("open plugin observation queue: %w", err)
+		}
+		collection = &pluginCollectionRuntime{scheduler: scheduler, queue: queue, sender: NewSender(config.ServerURL, config.DeviceToken), maxPolicies: collectionConfig.MaxPolicies, maxTasks: collectionConfig.MaxTasksPerRun, lastAttempt: make(map[string]time.Time)}
+	}
 	return &PluginRuntime{
 		deviceID: config.DeviceID, control: control, reconciler: reconciler, stager: stager, stateStore: stateStore,
 		cleanupInterval: config.StagingCleanupInterval, orphanGrace: config.StagingOrphanGrace,
 		cleanupLimit: config.StagingCleanupLimit, cleanupTimeout: config.StagingCleanupTimeout,
-		cleanupObserver: config.StagingObserver, now: time.Now,
+		cleanupObserver: config.StagingObserver, now: time.Now, collection: collection,
 	}, nil
 }
 
@@ -154,31 +198,145 @@ func (r *PluginRuntime) ReconcileOnce(ctx context.Context) error {
 	if _, ok := ctx.Deadline(); !ok {
 		return errors.New("plugin reconciliation context must have a deadline")
 	}
-	r.mu.Lock()
-	if r.closed || r.closing {
-		r.mu.Unlock()
-		return errors.New("plugin runtime is closing or closed")
+	operationCtx, done, err := r.beginOperation(ctx)
+	if err != nil {
+		return err
 	}
-	if r.reconcileDone != nil {
-		r.mu.Unlock()
-		return errors.New("plugin reconciliation is already in progress")
-	}
-	operationCtx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	r.reconcileCancel = cancel
-	r.reconcileDone = done
-	r.mu.Unlock()
 
 	cleanupErr := r.cleanupStaging(operationCtx)
 	reconcileErr := ReconcilePluginsOnce(operationCtx, r.deviceID, r.control, r.reconciler)
-	err := errors.Join(cleanupErr, reconcileErr)
-	cancel()
+	policyErr := r.refreshCollectionPolicies(operationCtx)
+	r.endOperation(done)
+	return errors.Join(cleanupErr, reconcileErr, policyErr)
+}
+
+func (r *PluginRuntime) beginOperation(ctx context.Context) (context.Context, chan struct{}, error) {
 	r.mu.Lock()
-	r.reconcileCancel = nil
-	r.reconcileDone = nil
+	defer r.mu.Unlock()
+	if r.closed || r.closing {
+		return nil, nil, errors.New("plugin runtime is closing or closed")
+	}
+	if r.operationDone != nil {
+		return nil, nil, errors.New("another plugin operation is already in progress")
+	}
+	operationCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	r.operationCancel = cancel
+	r.operationDone = done
+	return operationCtx, done, nil
+}
+
+func (r *PluginRuntime) endOperation(done chan struct{}) {
+	r.mu.Lock()
+	if r.operationCancel != nil {
+		r.operationCancel()
+	}
+	r.operationCancel = nil
+	r.operationDone = nil
 	close(done)
 	r.mu.Unlock()
-	return err
+}
+
+func (r *PluginRuntime) refreshCollectionPolicies(ctx context.Context) error {
+	if r.collection == nil {
+		return nil
+	}
+	policies, err := r.control.CollectionPolicies(ctx, r.deviceID)
+	if err != nil {
+		return fmt.Errorf("poll plugin collection policies: %w", err)
+	}
+	if len(policies) > r.collection.maxPolicies {
+		return fmt.Errorf("plugin collection policy count %d exceeds local limit %d", len(policies), r.collection.maxPolicies)
+	}
+	activeKeys := make(map[string]struct{}, len(policies))
+	for _, policy := range policies {
+		if err := policy.Validate(); err != nil || policy.DeviceID != r.deviceID {
+			return errors.New("plugin collection policy response is invalid")
+		}
+		activeKeys[collectionPolicyKey(policy)] = struct{}{}
+	}
+	slices.SortFunc(policies, func(a, b plugins.CollectionPolicy) int {
+		return strings.Compare(collectionPolicyKey(a), collectionPolicyKey(b))
+	})
+	r.collection.policies = policies
+	for key := range r.collection.lastAttempt {
+		if _, exists := activeKeys[key]; !exists {
+			delete(r.collection.lastAttempt, key)
+		}
+	}
+	return nil
+}
+
+// CollectOnce sends retained data, runs a bounded due-policy batch, and sends once more.
+func (r *PluginRuntime) CollectOnce(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("plugin collection context is required")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("plugin collection context must have a deadline")
+	}
+	if r.collection == nil {
+		return errors.New("plugin collection runtime is disabled")
+	}
+	operationCtx, done, err := r.beginOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.endOperation(done)
+	var runErrors []error
+	if _, _, err := r.collection.queue.SendPending(operationCtx, r.collection.sender); err != nil {
+		runErrors = append(runErrors, fmt.Errorf("send pending plugin observations: %w", err))
+	}
+	now := r.now().UTC()
+	tasks := make([]plugins.CollectionTask, 0, r.collection.maxTasks)
+	keys := make([]string, 0, r.collection.maxTasks)
+	for _, policy := range r.collection.policies {
+		if !policy.Enabled || len(tasks) >= r.collection.maxTasks {
+			continue
+		}
+		key := collectionPolicyKey(policy)
+		if previous := r.collection.lastAttempt[key]; !previous.IsZero() && now.Sub(previous) < time.Duration(policy.IntervalSeconds)*time.Second {
+			continue
+		}
+		// A failed or unavailable target still consumes this policy interval so a
+		// short scheduler tick cannot become an implicit high-rate retry loop.
+		r.collection.lastAttempt[key] = now
+		target, ok := r.reconciler.CollectionTarget(policy.PluginID, policy.PluginRevision)
+		if !ok {
+			runErrors = append(runErrors, fmt.Errorf("collection target %s is not active at desired revision %d", key, policy.PluginRevision))
+			continue
+		}
+		tasks = append(tasks, plugins.CollectionTask{Plugin: target, CollectorID: policy.CollectorID, Config: append([]byte(nil), policy.Config...), Timeout: time.Duration(policy.TimeoutMilliseconds) * time.Millisecond})
+		keys = append(keys, key)
+	}
+	if len(tasks) > 0 {
+		outcomes, collectErr := r.collection.scheduler.CollectBatch(operationCtx, tasks)
+		if collectErr != nil {
+			runErrors = append(runErrors, collectErr)
+		} else {
+			for index, outcome := range outcomes {
+				if outcome.Err != nil {
+					runErrors = append(runErrors, fmt.Errorf("collect %s: %w", keys[index], outcome.Err))
+					continue
+				}
+				observation, err := NormalizePluginOutcome(r.deviceID, outcome)
+				if err == nil {
+					err = r.collection.queue.Append(observation)
+				}
+				if err != nil {
+					runErrors = append(runErrors, fmt.Errorf("queue %s: %w", keys[index], err))
+				}
+			}
+		}
+	}
+	if _, _, err := r.collection.queue.SendPending(operationCtx, r.collection.sender); err != nil {
+		runErrors = append(runErrors, fmt.Errorf("send collected plugin observations: %w", err))
+	}
+	return errors.Join(runErrors...)
+}
+
+func collectionPolicyKey(policy plugins.CollectionPolicy) string {
+	return policy.PluginID + "/" + policy.CollectorID
 }
 
 func (r *PluginRuntime) cleanupStaging(ctx context.Context) error {
@@ -220,10 +378,10 @@ func (r *PluginRuntime) Close(ctx context.Context) error {
 		return nil
 	}
 	r.closing = true
-	if r.reconcileCancel != nil {
-		r.reconcileCancel()
+	if r.operationCancel != nil {
+		r.operationCancel()
 	}
-	done := r.reconcileDone
+	done := r.operationDone
 	r.mu.Unlock()
 	if done != nil {
 		select {
@@ -241,11 +399,15 @@ func (r *PluginRuntime) Close(ctx context.Context) error {
 		r.stateStore = nil
 	}
 	stagerErr := r.stager.Close()
+	var queueErr error
+	if r.collection != nil {
+		queueErr = r.collection.queue.Close()
+	}
 	r.mu.Lock()
 	r.closed = true
 	r.closing = false
 	r.mu.Unlock()
-	return errors.Join(stateErr, stagerErr)
+	return errors.Join(stateErr, stagerErr, queueErr)
 }
 
 func requireRuntimeDeadline(ctx context.Context) error {

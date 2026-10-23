@@ -12,12 +12,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/DingZhizCA/homelab-monitor/internal/jsonutil"
 	"github.com/DingZhizCA/homelab-monitor/internal/metrics"
 )
 
@@ -26,8 +28,8 @@ const maxMetricsResponseBytes = 4096
 // Sender delivers snapshots to one configured Server endpoint.
 // Sender 将指标快照发送到配置的 Server，并复用带超时的 HTTP Client。
 type Sender struct {
-	endpoint, batchEndpoint, token string
-	client                         *http.Client
+	endpoint, batchEndpoint, pluginBatchEndpoint, token string
+	client                                              *http.Client
 }
 
 // SendResult contains sampling and one-shot refresh instructions from Server.
@@ -40,11 +42,82 @@ type SendResult struct {
 	AcceptedSnapshots int        `json:"accepted_snapshots,omitempty"`
 }
 
+// PluginSendResult confirms how many plugin observations the Server accepted.
+type PluginSendResult struct {
+	AcceptedObservations int  `json:"accepted_observations"`
+	Duplicate            bool `json:"duplicate"`
+}
+
 // NewSender creates a Sender for the metrics endpoint derived from serverURL.
 // NewSender 根据 Server 基础地址创建指标发送器。
 func NewSender(serverURL, token string) *Sender {
 	baseURL := strings.TrimRight(serverURL, "/")
-	return &Sender{endpoint: baseURL + "/api/v1/metrics", batchEndpoint: baseURL + "/api/v1/metrics/batch", token: token, client: newCredentialHTTPClient()}
+	return &Sender{endpoint: baseURL + "/api/v1/metrics", batchEndpoint: baseURL + "/api/v1/metrics/batch", pluginBatchEndpoint: baseURL + "/api/v1/plugin-metrics/batch", token: token, client: newCredentialHTTPClient()}
+}
+
+// SendPluginBatch uploads one explicitly bounded plugin observation batch.
+func (s *Sender) SendPluginBatch(ctx context.Context, batch metrics.PluginBatch, maxObservations, maxSamples int, maxBodyBytes int64) (PluginSendResult, error) {
+	if err := batch.Validate(maxObservations, maxSamples); err != nil {
+		return PluginSendResult{}, fmt.Errorf("validate plugin metric batch: %w", err)
+	}
+	if maxBodyBytes < 1 {
+		return PluginSendResult{}, errors.New("plugin metric batch body limit must be positive")
+	}
+	body, err := json.Marshal(batch)
+	if err != nil {
+		return PluginSendResult{}, fmt.Errorf("encode plugin metric batch: %w", err)
+	}
+	if int64(len(body)) > maxBodyBytes {
+		return PluginSendResult{}, fmt.Errorf("plugin metric batch body exceeds configured %d-byte limit", maxBodyBytes)
+	}
+	response, err := s.sendPluginJSON(ctx, body)
+	if err != nil {
+		return PluginSendResult{}, err
+	}
+	if response.AcceptedObservations != len(batch.Observations) {
+		return PluginSendResult{}, fmt.Errorf("server accepted %d of %d plugin observations", response.AcceptedObservations, len(batch.Observations))
+	}
+	return response, nil
+}
+
+func (s *Sender) sendPluginJSON(ctx context.Context, body []byte) (PluginSendResult, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.pluginBatchEndpoint, bytes.NewReader(body))
+	if err != nil {
+		return PluginSendResult{}, fmt.Errorf("create plugin metric request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if s.token != "" {
+		request.Header.Set("Authorization", "Bearer "+s.token)
+	}
+	response, err := s.client.Do(request)
+	if err != nil {
+		return PluginSendResult{}, fmt.Errorf("send plugin metrics: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, maxMetricsResponseBytes))
+		return PluginSendResult{}, fmt.Errorf("server returned %s: %s", response.Status, strings.TrimSpace(string(detail)))
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxMetricsResponseBytes+1))
+	if err != nil {
+		return PluginSendResult{}, fmt.Errorf("read plugin metric response: %w", err)
+	}
+	if len(data) > maxMetricsResponseBytes {
+		return PluginSendResult{}, fmt.Errorf("plugin metric response exceeds %d-byte limit", maxMetricsResponseBytes)
+	}
+	if err := jsonutil.RejectDuplicateObjectKeys(data); err != nil {
+		return PluginSendResult{}, fmt.Errorf("validate plugin metric response: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var result PluginSendResult
+	if err := decoder.Decode(&result); err != nil {
+		return PluginSendResult{}, fmt.Errorf("decode plugin metric response: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return PluginSendResult{}, errors.New("decode plugin metric response: expected exactly one JSON object")
+	}
+	return result, nil
 }
 
 // Send posts one snapshot and decodes any control instruction in the response.
