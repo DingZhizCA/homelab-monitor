@@ -529,6 +529,22 @@ func (r *Reconciler) checkpoint() ReconcilerCheckpoint {
 	return checkpoint
 }
 
+// ProtectedPackagePaths returns the current and rollback staging references.
+func (r *Reconciler) ProtectedPackagePaths() map[string]struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	protected := make(map[string]struct{})
+	for _, entry := range r.checkpoint().Plugins {
+		if entry.Current != nil {
+			protected[filepath.ToSlash(entry.Current.Package.RelativePath)] = struct{}{}
+		}
+		if entry.Previous != nil {
+			protected[filepath.ToSlash(entry.Previous.Package.RelativePath)] = struct{}{}
+		}
+	}
+	return protected
+}
+
 func versionCheckpoint(staged StagedPackage, revision uint64) *PluginVersionCheckpoint {
 	return &PluginVersionCheckpoint{Package: staged, AppliedRevision: revision}
 }

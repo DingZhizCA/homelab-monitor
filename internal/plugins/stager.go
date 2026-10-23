@@ -9,6 +9,7 @@ package plugins
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
@@ -16,9 +17,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
+
+const stagingLockFile = ".staging.lock"
 
 // StagedPackage identifies one verified package below the configured staging root.
 type StagedPackage struct {
@@ -34,13 +40,72 @@ type Stager struct {
 	rootPath        string
 	publicKey       ed25519.PublicKey
 	maxArtifactSize int64
+	limits          *StagingLimits
+	lock            *os.File
 	closed          bool
+}
+
+// StagingLimits bounds the complete Agent staging tree.
+type StagingLimits struct {
+	MaxArtifactBytes int64
+	MaxStagingBytes  int64
+	MaxPackages      int
+	MaxScanEntries   int
+}
+
+// StagingPruneResult reports bounded staging usage and cleanup work.
+type StagingPruneResult struct {
+	ScannedEntries  int
+	Packages        int
+	UsedBytes       int64
+	DeletedPackages int
+	DeletedBytes    int64
+}
+
+type stagingCandidate struct {
+	path     string
+	modified time.Time
+	bytes    int64
+}
+
+type stagingScan struct {
+	StagingPruneResult
+	candidates []stagingCandidate
 }
 
 // NewStager opens an existing absolute staging directory owned by this user.
 // The directory must have no group or other permissions, and every package
 // operation is bounded by the caller's explicit artifact size limit.
 func NewStager(rootPath string, publicKey ed25519.PublicKey, maxArtifactSize int64) (*Stager, error) {
+	return newStager(rootPath, publicKey, maxArtifactSize, nil)
+}
+
+// NewBoundedStager requires explicit single-package and total staging limits.
+func NewBoundedStager(rootPath string, publicKey ed25519.PublicKey, limits StagingLimits) (*Stager, error) {
+	if limits.MaxArtifactBytes < 1 || limits.MaxStagingBytes < limits.MaxArtifactBytes || limits.MaxPackages < 1 || limits.MaxScanEntries < 1 || limits.MaxPackages > (limits.MaxScanEntries-1)/8 {
+		return nil, errors.New("plugin staging limits must be positive and ordered")
+	}
+	copyOfLimits := limits
+	stager, err := newStager(rootPath, publicKey, limits.MaxArtifactBytes, &copyOfLimits)
+	if err != nil {
+		return nil, err
+	}
+	stager.lock, err = openStagingLock(stager.root)
+	if err != nil {
+		_ = stager.Close()
+		return nil, err
+	}
+	stager.mu.Lock()
+	_, scanErr := stager.scanLocked(context.Background())
+	stager.mu.Unlock()
+	if scanErr != nil {
+		_ = stager.Close()
+		return nil, scanErr
+	}
+	return stager, nil
+}
+
+func newStager(rootPath string, publicKey ed25519.PublicKey, maxArtifactSize int64, limits *StagingLimits) (*Stager, error) {
 	if !filepath.IsAbs(rootPath) {
 		return nil, errors.New("plugin staging path must be absolute")
 	}
@@ -61,7 +126,7 @@ func NewStager(rootPath string, publicKey ed25519.PublicKey, maxArtifactSize int
 	if err != nil {
 		return nil, fmt.Errorf("open plugin staging directory: %w", err)
 	}
-	return &Stager{root: root, rootPath: rootPath, publicKey: append(ed25519.PublicKey(nil), publicKey...), maxArtifactSize: maxArtifactSize}, nil
+	return &Stager{root: root, rootPath: rootPath, publicKey: append(ed25519.PublicKey(nil), publicKey...), maxArtifactSize: maxArtifactSize, limits: limits}, nil
 }
 
 // Stage verifies package bytes and writes them without replacing an existing version.
@@ -85,9 +150,6 @@ func (s *Stager) Stage(manifestJSON, signature, artifact []byte) (StagedPackage,
 	if s.closed {
 		return StagedPackage{}, errors.New("plugin stager is closed")
 	}
-	if err := s.ensurePrivateDirectories(parent); err != nil {
-		return StagedPackage{}, err
-	}
 	if info, err := s.root.Lstat(relativePath); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
 			return StagedPackage{}, errors.New("existing plugin package path is not a private directory")
@@ -98,6 +160,19 @@ func (s *Stager) Stage(manifestJSON, signature, artifact []byte) (StagedPackage,
 		return StagedPackage{Manifest: manifest, RelativePath: filepath.ToSlash(relativePath), ArtifactPath: filepath.Join(s.rootPath, relativePath, "artifact")}, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return StagedPackage{}, fmt.Errorf("inspect staged plugin package: %w", err)
+	}
+	if s.limits != nil {
+		usage, err := s.scanLocked(context.Background())
+		if err != nil {
+			return StagedPackage{}, err
+		}
+		incomingBytes := int64(len(manifestJSON)) + int64(len(signature)) + int64(len(artifact)) + sha256.Size*2 + 1
+		if usage.Packages >= s.limits.MaxPackages || incomingBytes > s.limits.MaxStagingBytes-usage.UsedBytes {
+			return StagedPackage{}, errors.New("plugin staging capacity reached")
+		}
+	}
+	if err := s.ensurePrivateDirectories(parent); err != nil {
+		return StagedPackage{}, err
 	}
 	if err := s.root.Mkdir(relativePath, 0o700); err != nil {
 		return StagedPackage{}, fmt.Errorf("create staged plugin package: %w", err)
@@ -138,6 +213,183 @@ func (s *Stager) Stage(manifestJSON, signature, artifact []byte) (StagedPackage,
 	}
 	cleanup = false
 	return StagedPackage{Manifest: manifest, RelativePath: filepath.ToSlash(relativePath), ArtifactPath: filepath.Join(s.rootPath, relativePath, "artifact")}, nil
+}
+
+// Prune removes complete old packages not referenced by current or rollback state.
+func (s *Stager) Prune(ctx context.Context, protected map[string]struct{}, olderThan time.Time, maxDeletes int) (StagingPruneResult, error) {
+	if ctx == nil || olderThan.IsZero() || maxDeletes < 1 || s.limits == nil {
+		return StagingPruneResult{}, errors.New("bounded plugin staging cleanup requires context, cutoff, and delete limit")
+	}
+	for path := range protected {
+		clean := filepath.Clean(filepath.FromSlash(path))
+		if path == "" || filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.ToSlash(clean) != path {
+			return StagingPruneResult{}, errors.New("protected staged package path is invalid")
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return StagingPruneResult{}, errors.New("plugin stager is closed")
+	}
+	scan, err := s.scanLocked(ctx)
+	if err != nil {
+		return StagingPruneResult{}, err
+	}
+	result := scan.StagingPruneResult
+	slices.SortFunc(scan.candidates, func(left, right stagingCandidate) int {
+		if compared := left.modified.Compare(right.modified); compared != 0 {
+			return compared
+		}
+		return strings.Compare(left.path, right.path)
+	})
+	for _, candidate := range scan.candidates {
+		if result.DeletedPackages >= maxDeletes || !candidate.modified.Before(olderThan) {
+			continue
+		}
+		canonical := filepath.ToSlash(candidate.path)
+		if _, keep := protected[canonical]; keep {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		if err := s.root.RemoveAll(candidate.path); err != nil {
+			return result, fmt.Errorf("remove staged plugin package: %w", err)
+		}
+		s.removeEmptyParents(filepath.Dir(candidate.path))
+		result.DeletedPackages++
+		result.DeletedBytes += candidate.bytes
+	}
+	return result, nil
+}
+
+func (s *Stager) scanLocked(ctx context.Context) (stagingScan, error) {
+	var result stagingScan
+	if s.limits == nil {
+		return result, errors.New("staging scan requires total limits")
+	}
+	var walk func(string, int) error
+	walk = func(relative string, depth int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		directory, err := s.root.Open(relative)
+		if err != nil {
+			return fmt.Errorf("open staging directory: %w", err)
+		}
+		defer directory.Close()
+		for {
+			entries, err := directory.ReadDir(32)
+			if err != nil && !errors.Is(err, io.EOF) {
+				return fmt.Errorf("scan staging directory: %w", err)
+			}
+			for _, entry := range entries {
+				result.ScannedEntries++
+				if result.ScannedEntries > s.limits.MaxScanEntries {
+					return errors.New("plugin staging scan entry limit exceeded")
+				}
+				path := filepath.Join(relative, entry.Name())
+				if depth == 0 && entry.Name() == stagingLockFile {
+					info, statErr := s.root.Lstat(path)
+					if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+						return errors.New("plugin staging lock is unsafe")
+					}
+					continue
+				}
+				info, statErr := s.root.Lstat(path)
+				if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+					return fmt.Errorf("staging path %q is not a private directory", path)
+				}
+				if depth == 3 {
+					candidate, scanErr := s.scanPackageLocked(path, info.ModTime(), &result.ScannedEntries)
+					if scanErr != nil {
+						return scanErr
+					}
+					result.Packages++
+					result.UsedBytes += candidate.bytes
+					result.candidates = append(result.candidates, candidate)
+					if result.Packages > s.limits.MaxPackages || result.UsedBytes > s.limits.MaxStagingBytes {
+						return errors.New("plugin staging exceeds configured capacity")
+					}
+				} else if err := walk(path, depth+1); err != nil {
+					return err
+				}
+			}
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+		}
+	}
+	if err := walk(".", 0); err != nil {
+		return stagingScan{}, err
+	}
+	return result, nil
+}
+
+func (s *Stager) scanPackageLocked(path string, modified time.Time, scanned *int) (stagingCandidate, error) {
+	directory, err := s.root.Open(path)
+	if err != nil {
+		return stagingCandidate{}, err
+	}
+	defer directory.Close()
+	expected := map[string]struct {
+		mode os.FileMode
+		max  int64
+	}{
+		"manifest.json": {0o600, maxArtifactManifestBytes},
+		"manifest.sig":  {0o600, ed25519.SignatureSize},
+		"artifact":      {0o700, s.maxArtifactSize},
+		"verified":      {0o600, sha256.Size*2 + 1},
+	}
+	seen := make(map[string]struct{}, len(expected))
+	var used int64
+	for {
+		entries, readErr := directory.ReadDir(8)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return stagingCandidate{}, readErr
+		}
+		for _, entry := range entries {
+			*scanned++
+			if *scanned > s.limits.MaxScanEntries {
+				return stagingCandidate{}, errors.New("plugin staging scan entry limit exceeded")
+			}
+			limits, ok := expected[entry.Name()]
+			if !ok {
+				return stagingCandidate{}, fmt.Errorf("staged package %q contains an unexpected entry", path)
+			}
+			info, err := s.root.Lstat(filepath.Join(path, entry.Name()))
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != limits.mode || info.Size() > limits.max || info.Size() > s.limits.MaxStagingBytes-used {
+				return stagingCandidate{}, fmt.Errorf("staged package %q contains an unsafe file", path)
+			}
+			seen[entry.Name()] = struct{}{}
+			used += info.Size()
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+	}
+	if len(seen) != len(expected) {
+		return stagingCandidate{}, fmt.Errorf("staged package %q is incomplete", path)
+	}
+	return stagingCandidate{path: path, modified: modified, bytes: used}, nil
+}
+
+func (s *Stager) removeEmptyParents(path string) {
+	for path != "." && path != "" {
+		directory, err := s.root.Open(path)
+		if err != nil {
+			return
+		}
+		entries, readErr := directory.ReadDir(1)
+		_ = directory.Close()
+		if readErr == nil || len(entries) != 0 || !errors.Is(readErr, io.EOF) {
+			return
+		}
+		if err := s.root.Remove(path); err != nil {
+			return
+		}
+		path = filepath.Dir(path)
+	}
 }
 
 // VerifyStaged rechecks stored bytes before a later lifecycle component uses them.
@@ -208,7 +460,25 @@ func (s *Stager) Close() error {
 		return nil
 	}
 	s.closed = true
-	return s.root.Close()
+	var lockErr error
+	if s.lock != nil {
+		lockErr = syscall.Flock(int(s.lock.Fd()), syscall.LOCK_UN)
+		lockErr = errors.Join(lockErr, s.lock.Close())
+		s.lock = nil
+	}
+	return errors.Join(lockErr, s.root.Close())
+}
+
+func openStagingLock(root *os.Root) (*os.File, error) {
+	file, err := root.OpenFile(stagingLockFile, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open plugin staging lock: %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("lock plugin staging directory: %w", err)
+	}
+	return file, nil
 }
 
 func (s *Stager) ensurePrivateDirectories(relativePath string) error {

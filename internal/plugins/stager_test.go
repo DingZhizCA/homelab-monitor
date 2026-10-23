@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/testutil"
 )
@@ -78,6 +80,108 @@ func TestStagerWritesVerifiedPackageImmutably(t *testing.T) {
 	if _, err := stager.Stage(manifestJSON, signature, artifact); err == nil {
 		t.Fatal("modified existing package contents were accepted")
 	}
+}
+
+func TestBoundedStagerRejectsCapacityAndPrunesOnlyOldUnprotectedPackages(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootPath := filepath.Join(testutil.TempDir(t), "staging")
+	if err := os.Mkdir(rootPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stager, err := NewBoundedStager(rootPath, publicKey, StagingLimits{
+		MaxArtifactBytes: 1024, MaxStagingBytes: 4096, MaxPackages: 2, MaxScanEntries: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stager.Close()
+	stageVersion := func(version string) StagedPackage {
+		manifest := validManifest()
+		manifest.Version = version
+		manifest.ArtifactSHA256 = ""
+		bundle, _, err := SignPackage(privateKey, manifest, []byte("artifact-"+version))
+		if err != nil {
+			t.Fatal(err)
+		}
+		staged, err := stager.Stage(bundle.ManifestJSON, bundle.Signature, bundle.Artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return staged
+	}
+	current := stageVersion("1.0.0")
+	orphan := stageVersion("2.0.0")
+	retry := mustSignedBundle(t, privateKey, "1.0.0")
+	if _, err := stager.Stage(retry.ManifestJSON, retry.Signature, retry.Artifact); err != nil {
+		t.Fatalf("identical package retry failed at capacity: %v", err)
+	}
+	overflow := mustSignedBundle(t, privateKey, "3.0.0")
+	if _, err := stager.Stage(overflow.ManifestJSON, overflow.Signature, overflow.Artifact); err == nil {
+		t.Fatal("staging accepted a package beyond its count limit")
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	for _, staged := range []StagedPackage{current, orphan} {
+		if err := os.Chtimes(filepath.Join(rootPath, filepath.FromSlash(staged.RelativePath)), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := stager.Prune(context.Background(), map[string]struct{}{current.RelativePath: {}}, time.Now().Add(-time.Hour), 1)
+	if err != nil || result.DeletedPackages != 1 {
+		t.Fatalf("prune result=%+v err=%v", result, err)
+	}
+	if _, err := stager.VerifyStaged(current.RelativePath); err != nil {
+		t.Fatalf("protected current package removed: %v", err)
+	}
+	if _, err := stager.VerifyStaged(orphan.RelativePath); err == nil {
+		t.Fatal("old orphan package remains after cleanup")
+	}
+}
+
+func TestBoundedStagerLocksAndBoundsStartupScan(t *testing.T) {
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootPath := filepath.Join(testutil.TempDir(t), "staging")
+	if err := os.Mkdir(rootPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	limits := StagingLimits{MaxArtifactBytes: 1024, MaxStagingBytes: 4096, MaxPackages: 1, MaxScanEntries: 9}
+	first, err := NewBoundedStager(rootPath, publicKey, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := NewBoundedStager(rootPath, publicKey, limits); err == nil {
+		_ = second.Close()
+		t.Fatal("staging directory accepted a second writer")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"} {
+		if err := os.Mkdir(filepath.Join(rootPath, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stager, err := NewBoundedStager(rootPath, publicKey, limits); err == nil {
+		_ = stager.Close()
+		t.Fatal("staging tree beyond its scan limit was accepted")
+	}
+}
+
+func mustSignedBundle(t *testing.T, privateKey ed25519.PrivateKey, version string) PackageArtifact {
+	t.Helper()
+	manifest := validManifest()
+	manifest.Version = version
+	manifest.ArtifactSHA256 = ""
+	bundle, _, err := SignPackage(privateKey, manifest, []byte("artifact-"+version))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bundle
 }
 
 func TestStagerRejectsVerificationAfterClose(t *testing.T) {

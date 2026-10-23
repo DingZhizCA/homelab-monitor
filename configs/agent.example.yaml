@@ -45,6 +45,13 @@ plugins:
   # state_directory: "/var/lib/homelab-monitor-agent/plugins/state"
   # host_protocol_major: 1
   # max_artifact_bytes: <explicit byte limit>
+  # max_staging_bytes: <explicit total byte limit>
+  # max_staged_packages: <positive package count>
+  # max_staging_scan_entries: <positive filesystem scan bound>
+  # staging_cleanup_interval: "1h"
+  # staging_orphan_grace: "24h"
+  # staging_cleanup_delete_limit: <positive package count>
+  # staging_cleanup_timeout: "30s"
   # max_state_entries: <positive plugin count>
   # max_state_bytes: <explicit byte limit>
   # poll_interval: "5m"

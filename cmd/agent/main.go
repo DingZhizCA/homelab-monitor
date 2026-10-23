@@ -100,7 +100,14 @@ func main() {
 			PublisherKeyPath: config.Plugins.PublisherKeyPath, PermissionFile: config.Plugins.PermissionFile,
 			StagingDirectory: config.Plugins.StagingDirectory, RuntimeDirectory: config.Plugins.RuntimeDirectory, StateDirectory: config.Plugins.StateDirectory,
 			HostProtocolMajor: config.Plugins.HostProtocolMajor, MaxArtifactBytes: config.Plugins.MaxArtifactBytes,
-			MaxStateEntries: config.Plugins.MaxStateEntries, MaxStateBytes: config.Plugins.MaxStateBytes,
+			MaxStagingBytes: config.Plugins.MaxStagingBytes, MaxStagedPackages: config.Plugins.MaxStagedPackages,
+			MaxStagingScanEntries:  config.Plugins.MaxStagingScanEntries,
+			StagingCleanupInterval: config.Plugins.StagingCleanupInterval.Duration,
+			StagingOrphanGrace:     config.Plugins.StagingOrphanGrace.Duration,
+			StagingCleanupLimit:    config.Plugins.StagingCleanupLimit,
+			StagingCleanupTimeout:  config.Plugins.StagingCleanupTimeout.Duration,
+			StagingObserver:        logStagingCleanup,
+			MaxStateEntries:        config.Plugins.MaxStateEntries, MaxStateBytes: config.Plugins.MaxStateBytes,
 			OperationTimeout:       config.Plugins.OperationTimeout.Duration,
 			MaxConsecutiveFailures: config.Plugins.MaxConsecutiveFailures,
 			InitialFailureBackoff:  config.Plugins.InitialFailureBackoff.Duration,
@@ -153,6 +160,14 @@ func main() {
 		case <-timer.C:
 		}
 	}
+}
+
+func logStagingCleanup(observation agentpkg.StagingCleanupObservation) {
+	level := "INFO"
+	if observation.Err != nil {
+		level = "ERROR"
+	}
+	log.Printf("component=agent-plugin level=%s staging_cutoff=%q scanned_entries=%d packages=%d used_bytes=%d deleted_packages=%d deleted_bytes=%d duration=%q error=%q msg=%q", level, observation.Cutoff, observation.ScannedEntries, observation.Packages, observation.UsedBytes, observation.DeletedPackages, observation.DeletedBytes, observation.Duration, observation.Err, "bounded plugin staging cleanup completed")
 }
 
 type pluginControlRunner interface {

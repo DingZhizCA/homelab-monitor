@@ -32,7 +32,7 @@ Host 和插件服务端的 `ValidateConfig` 都要求 Collector 已通过 `Descr
 
 插件侧 `ServeUnixPlugin` 只在已有私有运行目录中创建 Unix Socket，权限限制为所有者读写，拒绝覆盖已有路径，并在进程上下文结束后清理自己创建的 socket。若多个插件仍使用同一 OS 用户，0600 socket 权限不能防止同 UID 插件互访；运行用户隔离仍由未实现的 Supervisor 负责。
 
-Agent staging 会把已验签的制品保存为 owner-only 可执行文件（0700），元数据保持 0600；每次交给后续生命周期组件前重新核对内容、文件类型和权限。Stage/Verify 本身不执行制品，可执行位不构成沙箱或来源授权策略。
+Agent staging 会把已验签的制品保存为 owner-only 可执行文件（0700），元数据保持 0600；每次交给后续生命周期组件前重新核对内容、文件类型和权限。目录另有跨进程单写者锁、总字节/包数/扫描边界及保护 current/previous 的有界旧包清理。Stage/Verify 本身不执行制品，可执行位不构成沙箱或来源授权策略。
 
 Host 与插件服务端显式将单条 gRPC 消息的收发上限设为 4 MiB，沿用当前 gRPC 默认边界，避免发送侧无显式上限。健康/错误诊断文本在两侧统一限制为最多 1024 个 UTF-8 字节，防止插件将大消息内容扩散进 Agent 状态报告。4 MiB 是初始安全上限，尚未用真实 Collector 描述及采集结果分布验证；调整前应补充 payload 测量和超限行为测试。
 

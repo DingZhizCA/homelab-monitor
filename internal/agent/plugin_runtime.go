@@ -30,6 +30,14 @@ type PluginRuntimeConfig struct {
 	RuntimeDirectory       string
 	HostProtocolMajor      uint16
 	MaxArtifactBytes       int64
+	MaxStagingBytes        int64
+	MaxStagedPackages      int
+	MaxStagingScanEntries  int
+	StagingCleanupInterval time.Duration
+	StagingOrphanGrace     time.Duration
+	StagingCleanupLimit    int
+	StagingCleanupTimeout  time.Duration
+	StagingObserver        StagingCleanupObserver
 	StateDirectory         string
 	MaxStateEntries        int
 	MaxStateBytes          int64
@@ -38,6 +46,20 @@ type PluginRuntimeConfig struct {
 	InitialFailureBackoff  time.Duration
 	MaxFailureBackoff      time.Duration
 }
+
+// StagingCleanupObservation reports one Agent staging cleanup pass.
+type StagingCleanupObservation struct {
+	Cutoff          time.Time
+	ScannedEntries  int
+	Packages        int
+	UsedBytes       int64
+	DeletedPackages int
+	DeletedBytes    int64
+	Duration        time.Duration
+	Err             error
+}
+
+type StagingCleanupObserver func(StagingCleanupObservation)
 
 // PluginRuntime owns the Agent's package verifier, process manager, and reconciler.
 type PluginRuntime struct {
@@ -52,12 +74,19 @@ type PluginRuntime struct {
 	closed          bool
 	reconcileCancel context.CancelFunc
 	reconcileDone   chan struct{}
+	cleanupInterval time.Duration
+	orphanGrace     time.Duration
+	cleanupLimit    int
+	cleanupTimeout  time.Duration
+	cleanupObserver StagingCleanupObserver
+	lastCleanup     time.Time
+	now             func() time.Time
 }
 
 // NewPluginRuntime assembles plugin control only from explicit trust and resource settings.
 func NewPluginRuntime(config PluginRuntimeConfig) (*PluginRuntime, error) {
-	if strings.TrimSpace(config.DeviceID) == "" || strings.TrimSpace(config.DeviceID) != config.DeviceID || config.HostProtocolMajor == 0 || config.MaxArtifactBytes < 1 || config.OperationTimeout <= 0 || !filepath.IsAbs(config.StateDirectory) || config.MaxStateEntries < 1 || config.MaxStateBytes < 1 {
-		return nil, errors.New("plugin identity, protocol, artifact, operation, and local state limits are required")
+	if strings.TrimSpace(config.DeviceID) == "" || strings.TrimSpace(config.DeviceID) != config.DeviceID || config.HostProtocolMajor == 0 || config.MaxArtifactBytes < 1 || config.MaxStagingBytes < config.MaxArtifactBytes || config.MaxStagedPackages < 1 || config.MaxStagingScanEntries < 1 || config.MaxStagedPackages > (config.MaxStagingScanEntries-1)/8 || config.StagingCleanupInterval <= 0 || config.StagingOrphanGrace <= 0 || config.StagingCleanupLimit < 1 || config.StagingCleanupTimeout <= 0 || config.StagingObserver == nil || config.OperationTimeout <= 0 || !filepath.IsAbs(config.StateDirectory) || config.MaxStateEntries < 1 || config.MaxStateBytes < 1 {
+		return nil, errors.New("plugin identity, protocol, staging, cleanup, operation, and local state limits are required")
 	}
 	if config.MaxConsecutiveFailures == 0 || config.InitialFailureBackoff <= 0 || config.MaxFailureBackoff < config.InitialFailureBackoff {
 		return nil, errors.New("plugin retry failure limit and ordered backoffs are required")
@@ -74,7 +103,10 @@ func NewPluginRuntime(config PluginRuntimeConfig) (*PluginRuntime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load local plugin grants: %w", err)
 	}
-	stager, err := plugins.NewStager(config.StagingDirectory, publicKey, config.MaxArtifactBytes)
+	stager, err := plugins.NewBoundedStager(config.StagingDirectory, publicKey, plugins.StagingLimits{
+		MaxArtifactBytes: config.MaxArtifactBytes, MaxStagingBytes: config.MaxStagingBytes,
+		MaxPackages: config.MaxStagedPackages, MaxScanEntries: config.MaxStagingScanEntries,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("open plugin package stager: %w", err)
 	}
@@ -104,7 +136,12 @@ func NewPluginRuntime(config PluginRuntimeConfig) (*PluginRuntime, error) {
 		_ = stager.Close()
 		return nil, fmt.Errorf("configure plugin reconciler: %w", err)
 	}
-	return &PluginRuntime{deviceID: config.DeviceID, control: control, reconciler: reconciler, stager: stager, stateStore: stateStore}, nil
+	return &PluginRuntime{
+		deviceID: config.DeviceID, control: control, reconciler: reconciler, stager: stager, stateStore: stateStore,
+		cleanupInterval: config.StagingCleanupInterval, orphanGrace: config.StagingOrphanGrace,
+		cleanupLimit: config.StagingCleanupLimit, cleanupTimeout: config.StagingCleanupTimeout,
+		cleanupObserver: config.StagingObserver, now: time.Now,
+	}, nil
 }
 
 // ReconcileOnce polls and applies one control batch, without scheduling metrics.
@@ -130,7 +167,9 @@ func (r *PluginRuntime) ReconcileOnce(ctx context.Context) error {
 	r.reconcileDone = done
 	r.mu.Unlock()
 
-	err := ReconcilePluginsOnce(operationCtx, r.deviceID, r.control, r.reconciler)
+	cleanupErr := r.cleanupStaging(operationCtx)
+	reconcileErr := ReconcilePluginsOnce(operationCtx, r.deviceID, r.control, r.reconciler)
+	err := errors.Join(cleanupErr, reconcileErr)
 	cancel()
 	r.mu.Lock()
 	r.reconcileCancel = nil
@@ -138,6 +177,31 @@ func (r *PluginRuntime) ReconcileOnce(ctx context.Context) error {
 	close(done)
 	r.mu.Unlock()
 	return err
+}
+
+func (r *PluginRuntime) cleanupStaging(ctx context.Context) error {
+	now := r.now().UTC()
+	if !r.lastCleanup.IsZero() && now.Sub(r.lastCleanup) < r.cleanupInterval {
+		return nil
+	}
+	started := time.Now()
+	observation := StagingCleanupObservation{Cutoff: now.Add(-r.orphanGrace)}
+	cleanupCtx, cancel := context.WithTimeout(ctx, r.cleanupTimeout)
+	defer cancel()
+	result, err := r.stager.Prune(cleanupCtx, r.reconciler.ProtectedPackagePaths(), observation.Cutoff, r.cleanupLimit)
+	observation.ScannedEntries = result.ScannedEntries
+	observation.Packages = result.Packages
+	observation.UsedBytes = result.UsedBytes
+	observation.DeletedPackages = result.DeletedPackages
+	observation.DeletedBytes = result.DeletedBytes
+	observation.Duration = time.Since(started)
+	if err != nil {
+		observation.Err = fmt.Errorf("clean plugin staging: %w", err)
+	} else {
+		r.lastCleanup = now
+	}
+	r.cleanupObserver(observation)
+	return observation.Err
 }
 
 // Close cancels an in-flight reconciliation before stopping processes and closing the stager.

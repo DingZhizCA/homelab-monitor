@@ -30,7 +30,7 @@ func TestNewPluginRuntimeRequiresAndAssemblesExplicitTrustInputs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,27 +42,56 @@ func TestNewPluginRuntimeRequiresAndAssemblesExplicitTrustInputs(t *testing.T) {
 	if err := os.WriteFile(permissionPath, []byte(`{"grants":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	var cleanupObservations []StagingCleanupObservation
 	config := PluginRuntimeConfig{
 		ServerURL: "https://server.example", DeviceID: "node-a", DeviceToken: "device-token",
 		PublisherKeyPath: keyPath, PermissionFile: permissionPath,
 		StagingDirectory: stagingDirectory, RuntimeDirectory: runtimeDirectory, StateDirectory: stateDirectory,
 		HostProtocolMajor: 1, MaxArtifactBytes: 1 << 20, OperationTimeout: 30 * time.Second,
+		MaxStagingBytes: 16 << 20, MaxStagedPackages: 16, MaxStagingScanEntries: 256,
+		StagingCleanupInterval: time.Hour, StagingOrphanGrace: 24 * time.Hour,
+		StagingCleanupLimit: 4, StagingCleanupTimeout: time.Second,
+		StagingObserver: func(observation StagingCleanupObservation) {
+			cleanupObservations = append(cleanupObservations, observation)
+		},
 		MaxStateEntries: 16, MaxStateBytes: 1 << 20,
 		MaxConsecutiveFailures: 5, InitialFailureBackoff: time.Second, MaxFailureBackoff: 5 * time.Minute,
 	}
-	runtime, err := NewPluginRuntime(config)
+	pluginRuntime, err := NewPluginRuntime(config)
 	if err != nil {
 		t.Fatalf("assemble plugin runtime: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := runtime.Close(ctx); err != nil {
+	bundle, _, err := plugins.SignPackage(privateKey, plugins.Manifest{
+		PluginID: "orphan", Version: "1.0.0", Publisher: "example.test",
+		Platform: plugins.Platform{OS: "linux", Arch: "amd64"}, Protocol: plugins.ProtocolRange{Min: 1, Max: 1},
+		Collectors: []plugins.CollectorSpec{{ID: "health"}},
+	}, []byte("plugin executable"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := pluginRuntime.stager.Stage(bundle.ManifestJSON, bundle.Signature, bundle.Artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(filepath.Join(stagingDirectory, filepath.FromSlash(staged.RelativePath)), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := pluginRuntime.cleanupStaging(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(cleanupObservations) != 1 || cleanupObservations[0].DeletedPackages != 1 {
+		t.Fatalf("cleanup observations=%+v", cleanupObservations)
+	}
+	if err := pluginRuntime.Close(ctx); err != nil {
 		t.Fatalf("close plugin runtime: %v", err)
 	}
-	if runtime.control.client.Timeout != config.OperationTimeout {
-		t.Fatalf("plugin HTTP timeout=%s, want configured operation timeout %s", runtime.control.client.Timeout, config.OperationTimeout)
+	if pluginRuntime.control.client.Timeout != config.OperationTimeout {
+		t.Fatalf("plugin HTTP timeout=%s, want configured operation timeout %s", pluginRuntime.control.client.Timeout, config.OperationTimeout)
 	}
-	if err := runtime.ReconcileOnce(ctx); err == nil {
+	if err := pluginRuntime.ReconcileOnce(ctx); err == nil {
 		t.Fatal("closed plugin runtime accepted a reconciliation request")
 	}
 }
@@ -138,6 +167,9 @@ func TestPluginRuntimeCloseCancelsInFlightReconciliation(t *testing.T) {
 		PublisherKeyPath: keyPath, PermissionFile: permissionPath,
 		StagingDirectory: stagingDirectory, RuntimeDirectory: runtimeDirectory, StateDirectory: stateDirectory,
 		HostProtocolMajor: 1, MaxArtifactBytes: 1 << 20, OperationTimeout: 30 * time.Second,
+		MaxStagingBytes: 16 << 20, MaxStagedPackages: 16, MaxStagingScanEntries: 256,
+		StagingCleanupInterval: time.Hour, StagingOrphanGrace: 24 * time.Hour,
+		StagingCleanupLimit: 4, StagingCleanupTimeout: time.Second, StagingObserver: func(StagingCleanupObservation) {},
 		MaxStateEntries: 16, MaxStateBytes: 1 << 20,
 		MaxConsecutiveFailures: 3, InitialFailureBackoff: time.Second, MaxFailureBackoff: time.Minute,
 	})
@@ -147,6 +179,11 @@ func TestPluginRuntimeCloseCancelsInFlightReconciliation(t *testing.T) {
 	client := server.Client()
 	client.CheckRedirect = pluginRuntime.control.client.CheckRedirect
 	pluginRuntime.control.client = client
+	// A cleanup fault must not block a Desired disable or other control-plane
+	// reconciliation; staging itself will continue rejecting new packages.
+	if err := os.WriteFile(filepath.Join(stagingDirectory, "unexpected"), []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	reconcileCtx, cancelReconcile := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelReconcile()

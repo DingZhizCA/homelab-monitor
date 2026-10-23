@@ -79,6 +79,13 @@ type Config struct {
 		StateDirectory         string   `yaml:"state_directory"`
 		HostProtocolMajor      uint16   `yaml:"host_protocol_major"`
 		MaxArtifactBytes       int64    `yaml:"max_artifact_bytes"`
+		MaxStagingBytes        int64    `yaml:"max_staging_bytes"`
+		MaxStagedPackages      int      `yaml:"max_staged_packages"`
+		MaxStagingScanEntries  int      `yaml:"max_staging_scan_entries"`
+		StagingCleanupInterval Duration `yaml:"staging_cleanup_interval"`
+		StagingOrphanGrace     Duration `yaml:"staging_orphan_grace"`
+		StagingCleanupLimit    int      `yaml:"staging_cleanup_delete_limit"`
+		StagingCleanupTimeout  Duration `yaml:"staging_cleanup_timeout"`
 		MaxStateEntries        int      `yaml:"max_state_entries"`
 		MaxStateBytes          int64    `yaml:"max_state_bytes"`
 		PollInterval           Duration `yaml:"poll_interval"`
@@ -190,8 +197,8 @@ func (c Config) Validate() error {
 				return fmt.Errorf("plugins.%s must be an absolute path", entry.name)
 			}
 		}
-		if c.Plugins.HostProtocolMajor == 0 || c.Plugins.MaxArtifactBytes < 1 || c.Plugins.MaxStateEntries < 1 || c.Plugins.MaxStateBytes < 1 || c.Plugins.PollInterval.Duration <= 0 || c.Plugins.OperationTimeout.Duration <= 0 {
-			return fmt.Errorf("plugins requires explicit protocol, artifact, local state, poll interval, and operation limits")
+		if c.Plugins.HostProtocolMajor == 0 || c.Plugins.MaxArtifactBytes < 1 || c.Plugins.MaxStagingBytes < c.Plugins.MaxArtifactBytes || c.Plugins.MaxStagedPackages < 1 || c.Plugins.MaxStagingScanEntries < 1 || c.Plugins.MaxStagedPackages > (c.Plugins.MaxStagingScanEntries-1)/8 || c.Plugins.StagingCleanupInterval.Duration <= 0 || c.Plugins.StagingOrphanGrace.Duration <= 0 || c.Plugins.StagingCleanupLimit < 1 || c.Plugins.StagingCleanupTimeout.Duration <= 0 || c.Plugins.MaxStateEntries < 1 || c.Plugins.MaxStateBytes < 1 || c.Plugins.PollInterval.Duration <= 0 || c.Plugins.OperationTimeout.Duration <= 0 {
+			return fmt.Errorf("plugins requires explicit protocol, staging capacity and cleanup, local state, poll interval, and operation limits")
 		}
 		if c.Plugins.MaxConsecutiveFailures == 0 || c.Plugins.InitialFailureBackoff.Duration <= 0 || c.Plugins.MaxFailureBackoff.Duration < c.Plugins.InitialFailureBackoff.Duration {
 			return fmt.Errorf("plugins requires an explicit positive failure limit and ordered failure backoffs")
