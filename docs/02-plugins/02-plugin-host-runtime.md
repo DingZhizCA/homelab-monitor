@@ -12,7 +12,7 @@ Server Plugin Manager 管理期望版本；Agent Reconciler 管理本地期望/�
 ## 进程与权限
 - 每个插件包作为独立进程启动，不共享 Agent 地址空间。进程崩溃最多使其 Collector 不可用。
 - Plugin Host 不应默认拥有 root Shell 执行能力。普通插件使用低权限系统身份或受控隔离；不同特权类别必要时分进程。
-- 计划使用 systemd/cgroup v2 施加 MemoryMax/High、CPUQuota/Weight、TasksMax 等限制，但需在 Armbian 和 Ubuntu 现网只读验证是否允许非 root 管理和委派。
+- 当前独立 launcher 已施加每进程继承的 FD、进程数、单文件大小、虚拟地址空间、累计 CPU 时间硬限制及 `no_new_privs`。计划中的 systemd/cgroup v2 MemoryMax/High、CPUQuota/Weight、TasksMax 仍需在 Armbian 和 Ubuntu 现网只读验证非 root 管理和委派能力。
 - Unix Socket 放在受保护的运行目录，限制文件系统权限和 Peer 身份；禁止绑定对外 TCP 地址。
 - 插件若需要访问 OpenWrt、sing-box、Tailscale，应通过明确授权的受控代理/Adapter 获得有限能力，不能凭 Manifest 声明就获取任意凭据。
 
@@ -26,7 +26,7 @@ Collector 共用受控时间轮/任务池；插件进程中多个 Collector 的�
 模拟插件阻塞、Panic、OOM、CPU busy loop、过大输出、异常日志；验收项为 Plugin Host 可恢复、Agent 不被耗尽、N1 sing-box/Tailscale 转发路径与配置均未被影响。受限进程是可靠性边界，不等于能够安全执行任何不可信原生二进制。
 
 ## 当前代码落地边界
-插件基础代码已可复验暂存制品、启动经注入的进程句柄、完成 gRPC 握手、核对 Manifest 与 Describe 的 Collector 列表，并检查健康状态。Plugin Host 的每种 RPC 操作都要求调用方提供 deadline；调用方驱动的批次调度器限制并发，不创建定时器或改变 Agent 采样周期。Agent 对账会在显式控制轮询中检查已管理进程健康；失败时优先恢复最近一个已应用版本（若存在），否则重启当前暂存版本；连续失败按调用方必须提供的上限和指数退避隔离同一 Desired Revision。Linux `ExecSupervisor` 可启动独立子进程并按截止时间关闭，但没有 UID 降权、systemd/cgroup 资源限额或内核沙箱；因此这些能力不构成生产可用的安全隔离，也未完成生产验收。
+插件基础代码已可复验暂存制品、启动经注入的进程句柄、完成 gRPC 握手、核对 Manifest 与 Describe 的 Collector 列表，并检查健康状态。Plugin Host 的每种 RPC 操作都要求调用方提供 deadline；调用方驱动的批次调度器限制并发，不创建定时器或改变 Agent 采样周期。Agent 对账会在显式控制轮询中检查已管理进程健康；失败时优先恢复最近一个已应用版本（若存在），否则重启当前暂存版本；连续失败按调用方必须提供的上限和指数退避隔离同一 Desired Revision。Linux `ExecSupervisor` 在生产装配中通过专用 launcher 无竞态地设置硬 rlimit 和 `no_new_privs` 后启动独立子进程，并按截止时间关闭；它仍没有 UID 降权、systemd/cgroup 总量控制或完整内核沙箱，因此不能作为生产安全隔离，也未完成目标设备验收。
 
 Host 和插件服务端的 `ValidateConfig` 都要求 Collector 已通过 `Describe` 声明；未描述的 ID 在调用插件实现之前即被拒绝。此检查与采集调用的描述校验一致。
 
@@ -36,7 +36,7 @@ Agent staging 会把已验签的制品保存为 owner-only 可执行文件（070
 
 Host 与插件服务端显式将单条 gRPC 消息的收发上限设为 4 MiB，沿用当前 gRPC 默认边界，避免发送侧无显式上限。健康/错误诊断文本在两侧统一限制为最多 1024 个 UTF-8 字节，防止插件将大消息内容扩散进 Agent 状态报告。4 MiB 是初始安全上限，尚未用真实 Collector 描述及采集结果分布验证；调整前应补充 payload 测量和超限行为测试。
 
-Linux 下 `ExecSupervisor` 可将已暂存的二进制直接作为独立子进程启动，不经过 Shell；每次启动在配置的私有运行目录下创建 `0700` 临时目录，并通过 `HOMELAB_PLUGIN_ID`、`HOMELAB_PLUGIN_VERSION`、`HOMELAB_PLUGIN_SOCKET` 环境变量提供身份和 Socket 路径。关闭时先向独立进程组发送 `SIGTERM`，调用方截止时间到达后发送 `SIGKILL`，进程退出后清理运行目录。该实现不提权、不切换 UID、没有 cgroup/内核资源限制；同 UID 插件间仍不构成安全隔离。
+Linux 下 `ExecSupervisor` 每次启动在配置的私有运行目录中创建 `0700` 临时目录，只把 `HOMELAB_PLUGIN_ID`、`HOMELAB_PLUGIN_VERSION`、`HOMELAB_PLUGIN_SOCKET` 三个环境变量交给独立子进程。生产构造要求绝对路径、可执行且不允许 group/other 写入的 `plugin-launcher`，其直接父目录也不能由 group/other 写入或是符号链接；launcher 不经过 Shell，在执行已复验制品前设置硬 `RLIMIT_NOFILE`、`RLIMIT_NPROC`、`RLIMIT_FSIZE`、`RLIMIT_AS`、`RLIMIT_CPU` 和 `no_new_privs`。关闭时先向独立进程组发送 `SIGTERM`，调用方截止时间到达后发送 `SIGKILL`，进程退出后清理运行目录。`RLIMIT_NPROC` 按真实 UID 共享计数，其余限制主要按单进程或单文件生效，不能替代 cgroup 对整个进程树的 CPU 百分比、RSS 和任务数总量控制；实现也不切换 UID 或限制文件系统、系统调用和网络，同 UID 插件间仍不构成安全隔离。
 
 Supervisor 在进程启动后、返回句柄前再次检查启动上下文；若 deadline 在 `exec.Start` 成功期间到期，会终止新进程并等待清理完成，避免将已超时的启动作为成功交付。
 

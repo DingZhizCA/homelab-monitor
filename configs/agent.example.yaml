@@ -43,7 +43,14 @@ plugins:
   # staging_directory: "/var/lib/homelab-monitor/plugins/staging"
   # runtime_directory: "/run/homelab-monitor/plugins"
   # state_directory: "/var/lib/homelab-monitor-agent/plugins/state"
+  # launcher_path: "/usr/libexec/homelab-monitor/plugin-launcher"
   # host_protocol_major: 1
+  # The launcher applies these hard Linux limits before executing each plugin.
+  # max_open_files: <positive descriptor count>
+  # max_processes: <positive per-user process count>
+  # max_file_bytes: <positive created-file byte limit>
+  # max_address_space_bytes: <positive virtual-address byte limit>
+  # max_cpu_seconds: <positive cumulative CPU seconds>
   # max_artifact_bytes: <explicit byte limit>
   # max_staging_bytes: <explicit total byte limit>
   # max_staged_packages: <positive package count>

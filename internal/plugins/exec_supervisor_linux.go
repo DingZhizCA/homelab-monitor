@@ -3,9 +3,9 @@
 /*
 Package plugins supervises native Linux plugin processes without elevating them.
 
-This implementation creates a private runtime directory, starts the verified
-artifact directly, and provides bounded process shutdown. It does not change
-UID, apply cgroup limits, or create a kernel security sandbox.
+This implementation creates a private runtime directory and provides bounded
+process shutdown. Production construction routes execution through a trusted
+launcher that applies inherited rlimits and no-new-privileges before exec.
 */
 package plugins
 
@@ -25,7 +25,31 @@ const linuxUnixSocketPathLimit = 108
 
 // ExecSupervisor starts plugin artifacts as separate, unprivileged processes.
 type ExecSupervisor struct {
-	runtimeRoot string
+	runtimeRoot  string
+	launcherPath string
+	limits       ProcessLimits
+}
+
+// NewLimitedExecSupervisor requires a trusted launcher and explicit kernel limits.
+func NewLimitedExecSupervisor(runtimeRoot, launcherPath string, limits ProcessLimits) (*ExecSupervisor, error) {
+	supervisor, err := NewExecSupervisor(runtimeRoot)
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(launcherPath) || limits.Validate() != nil {
+		return nil, errors.New("absolute plugin launcher and positive process limits are required")
+	}
+	info, err := os.Lstat(launcherPath)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 || info.Mode().Perm()&0o022 != 0 {
+		return nil, errors.New("plugin launcher must be an executable, non-writable regular file")
+	}
+	parentInfo, err := os.Lstat(filepath.Dir(launcherPath))
+	if err != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 || parentInfo.Mode().Perm()&0o022 != 0 {
+		return nil, errors.New("plugin launcher parent must be a protected directory")
+	}
+	supervisor.launcherPath = filepath.Clean(launcherPath)
+	supervisor.limits = limits
+	return supervisor, nil
 }
 
 // NewExecSupervisor opens an existing private runtime directory for plugin sockets.
@@ -77,6 +101,9 @@ func (s *ExecSupervisor) Start(ctx context.Context, spec ProcessSpec) (Process, 
 	}
 
 	command := exec.Command(spec.ArtifactPath)
+	if s.launcherPath != "" {
+		command = exec.Command(s.launcherPath, launcherArguments(spec.ArtifactPath, s.limits)...)
+	}
 	command.Env = []string{
 		"HOMELAB_PLUGIN_ID=" + spec.Manifest.PluginID,
 		"HOMELAB_PLUGIN_VERSION=" + spec.Manifest.Version,

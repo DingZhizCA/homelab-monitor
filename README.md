@@ -39,6 +39,7 @@ mkdir -p bin
 go build -trimpath -o bin/homelab-server ./cmd/server
 go build -trimpath -o bin/homelab-agent ./cmd/agent
 go build -trimpath -o bin/homelab-plugin-pack ./cmd/plugin-pack
+go build -trimpath -o bin/homelab-plugin-launcher ./cmd/plugin-launcher
 go test -race ./...
 go vet ./...
 ```
@@ -118,7 +119,7 @@ Server 可通过 `--tls-cert`、`--tls-key` 启用 HTTPS，并通过 `--agent-cr
 
 告警规则管理同样默认关闭。完整启用人类认证后，再显式提供正值的 `--alert-rule-max-body-bytes`、`--alert-rule-max-depth` 和 `--alert-rule-max-conditions`，Server 才会挂载 Owner 规则路由。规则 Revision、当前指针及审计事件持久化到 `core.db`；这些参数只限制请求和表达式复杂度，不提供任何隐式阈值、规则模板或 Incident 策略。告警评估另由 `--alert-evaluation-enabled` 显式开启，并要求正值的 `--alert-evaluation-interval`、`--alert-evaluation-timeout`、`--alert-evaluation-max-rules`、`--incident-max-states`，以及明确给出 `--incident-pending-for`、`--incident-recovery-for`、`--incident-unknown-behavior` 和 `--incident-disabled-behavior`；立即转换必须写成 `0s`。调度器以稳定游标跨轮分页，只读取 Server 当前快照；单轮串行且有界，失败按规则隔离并记录，不触发采集。
 
-Agent 插件控制循环默认关闭。启用前必须显式配置插件公钥、权限 grant 文件、私有 staging/runtime/state 目录、协议版本、单制品大小、staging 总字节/包数/扫描上限、清理周期/宽限期/单轮删除量/超时、本地状态条目/字节上限、独立控制轮询间隔和操作超时；该循环与指标采样周期独立。staging 目录持有跨进程单写者锁；每次新包写入前按磁盘实况核算，达到任一边界即拒绝。清理只删除超过宽限期且不属于 Reconciler current/previous 的完整包；异常结构或扫描超限时不删除，后续 Stage 继续拒绝新包，同时 Desired 对账仍可执行停用或维持现有版本。本地状态以设备身份摘要、校验和、单写者锁和原子替换保存已观察意图、当前/前序包以及退避/隔离决策。Agent 启动时不自动拉起旧进程；首次取得 Server Desired 后才复验暂存包并恢复，同一 Revision 的隔离跨重启保留，新 Revision 才解除。Server 端还必须完整启用 SQLite、人类认证、设备认证，并提供现有私有绝对路径 `--plugin-artifact-dir`，以及正值的 `--plugin-max-artifact-bytes`、`--plugin-max-repository-bytes`、`--plugin-max-packages`、`--plugin-max-scan-entries`、`--plugin-cleanup-interval`、`--plugin-orphan-grace`、`--plugin-cleanup-delete-limit` 和 `--plugin-cleanup-timeout`。缺少任一依赖时插件控制路由不会启动。
+Agent 插件控制循环默认关闭。启用前必须显式配置插件公钥、权限 grant 文件、私有 staging/runtime/state 目录、专用 launcher 绝对路径、FD/进程数/单文件/虚拟地址空间/CPU 时间硬限制、协议版本、单制品大小、staging 总字节/包数/扫描上限、清理周期/宽限期/单轮删除量/超时、本地状态条目/字节上限、独立控制轮询间隔和操作超时；该循环与指标采样周期独立。launcher 在 `exec` 插件前设置硬 rlimit 和 `no_new_privs`，不引入提权后台服务。staging 目录持有跨进程单写者锁；每次新包写入前按磁盘实况核算，达到任一边界即拒绝。清理只删除超过宽限期且不属于 Reconciler current/previous 的完整包；异常结构或扫描超限时不删除，后续 Stage 继续拒绝新包，同时 Desired 对账仍可执行停用或维持现有版本。本地状态以设备身份摘要、校验和、单写者锁和原子替换保存已观察意图、当前/前序包以及退避/隔离决策。Agent 启动时不自动拉起旧进程；首次取得 Server Desired 后才复验暂存包并恢复，同一 Revision 的隔离跨重启保留，新 Revision 才解除。Server 端还必须完整启用 SQLite、人类认证、设备认证，并提供现有私有绝对路径 `--plugin-artifact-dir`，以及正值的 `--plugin-max-artifact-bytes`、`--plugin-max-repository-bytes`、`--plugin-max-packages`、`--plugin-max-scan-entries`、`--plugin-cleanup-interval`、`--plugin-orphan-grace`、`--plugin-cleanup-delete-limit` 和 `--plugin-cleanup-timeout`。缺少任一依赖时插件控制路由不会启动。
 
 `plugin-pack` 可用可选的 `--repository` 将刚签名且保留在 `--output` 中供审查的 bundle 原子导入 Server 制品仓库；导入时还必须传入与 Server 一致的 `--repository-max-bytes`、`--repository-max-packages` 和 `--repository-max-scan-entries`。重复导入相同字节幂等，冲突字节或容量超限拒绝。导入制品不会自动创建或启用 Desired State，也不会在写入路径自动删除旧包。
 
@@ -222,4 +223,4 @@ web/                  React Dashboard
 - 插件 Desired/Reported State、审计和制品路由可由 `cmd/server` 显式装配；Agent 可在有界私有状态中跨重启恢复回滚关联和同 Revision 隔离。Server 制品仓库有显式总字节、包数量和扫描边界，并按 Desired 引用与宽限期执行有界清理；参数仍需在目标设备调优。
 - Agent 的有界批量队列与插件控制均默认关闭，启用插件仍需本机信任根、权限 grant、私有状态目录，以及 staging 单包/总字节/包数/扫描/清理和全部运行参数有效。
 - 指标已有 SQLite 原始持久化、事务型分钟/小时/日聚合队列、分层查询与保留、显式 PASSIVE checkpoint、软硬容量保护，以及独立的 WAL 截断和 incremental vacuum 物理回收。维护及聚合参数尚未在目标设备调优，插件规范化指标尚未接入聚合表；流量归属账本和完整 Incident/通知流程仍未实现。
-- 插件进程当前为同 UID 子进程，缺少系统级 CPU、内存、文件和网络隔离，不能视为生产安全沙箱。
+- 插件进程当前为同 UID 子进程；专用 launcher 已设置 FD、进程数、单文件、虚拟地址空间和累计 CPU 时间硬限制及 `no_new_privs`，但仍缺少 cgroup 进程树总量、RSS、不同 UID、文件系统、系统调用和网络隔离，不能视为生产安全沙箱。

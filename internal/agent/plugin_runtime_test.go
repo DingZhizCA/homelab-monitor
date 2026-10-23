@@ -47,6 +47,7 @@ func TestNewPluginRuntimeRequiresAndAssemblesExplicitTrustInputs(t *testing.T) {
 		ServerURL: "https://server.example", DeviceID: "node-a", DeviceToken: "device-token",
 		PublisherKeyPath: keyPath, PermissionFile: permissionPath,
 		StagingDirectory: stagingDirectory, RuntimeDirectory: runtimeDirectory, StateDirectory: stateDirectory,
+		LauncherPath: writeTestPluginLauncher(t, root), ProcessLimits: testPluginProcessLimits(),
 		HostProtocolMajor: 1, MaxArtifactBytes: 1 << 20, OperationTimeout: 30 * time.Second,
 		MaxStagingBytes: 16 << 20, MaxStagedPackages: 16, MaxStagingScanEntries: 256,
 		StagingCleanupInterval: time.Hour, StagingOrphanGrace: 24 * time.Hour,
@@ -166,6 +167,7 @@ func TestPluginRuntimeCloseCancelsInFlightReconciliation(t *testing.T) {
 		ServerURL: server.URL, DeviceID: "node-a", DeviceToken: "device-token",
 		PublisherKeyPath: keyPath, PermissionFile: permissionPath,
 		StagingDirectory: stagingDirectory, RuntimeDirectory: runtimeDirectory, StateDirectory: stateDirectory,
+		LauncherPath: writeTestPluginLauncher(t, root), ProcessLimits: testPluginProcessLimits(),
 		HostProtocolMajor: 1, MaxArtifactBytes: 1 << 20, OperationTimeout: 30 * time.Second,
 		MaxStagingBytes: 16 << 20, MaxStagedPackages: 16, MaxStagingScanEntries: 256,
 		StagingCleanupInterval: time.Hour, StagingOrphanGrace: 24 * time.Hour,
@@ -212,5 +214,22 @@ func TestPluginRuntimeCloseCancelsInFlightReconciliation(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("reconciliation did not finish after cancellation")
+	}
+}
+
+func writeTestPluginLauncher(t *testing.T, directory string) string {
+	t.Helper()
+	path := filepath.Join(directory, "plugin-launcher")
+	contents := "#!/bin/sh\nartifact=\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --artifact ]; then artifact=$2; fi\n  shift 2\ndone\nexec \"$artifact\"\n"
+	if err := os.WriteFile(path, []byte(contents), 0o700); err != nil {
+		t.Fatalf("write test plugin launcher: %v", err)
+	}
+	return path
+}
+
+func testPluginProcessLimits() plugins.ProcessLimits {
+	return plugins.ProcessLimits{
+		MaxOpenFiles: 64, MaxProcesses: 32, MaxFileBytes: 1 << 20,
+		MaxAddressSpaceBytes: 1 << 30, MaxCPUSeconds: 30,
 	}
 }

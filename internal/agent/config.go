@@ -77,7 +77,13 @@ type Config struct {
 		StagingDirectory       string   `yaml:"staging_directory"`
 		RuntimeDirectory       string   `yaml:"runtime_directory"`
 		StateDirectory         string   `yaml:"state_directory"`
+		LauncherPath           string   `yaml:"launcher_path"`
 		HostProtocolMajor      uint16   `yaml:"host_protocol_major"`
+		MaxOpenFiles           uint64   `yaml:"max_open_files"`
+		MaxProcesses           uint64   `yaml:"max_processes"`
+		MaxFileBytes           uint64   `yaml:"max_file_bytes"`
+		MaxAddressSpaceBytes   uint64   `yaml:"max_address_space_bytes"`
+		MaxCPUSeconds          uint64   `yaml:"max_cpu_seconds"`
 		MaxArtifactBytes       int64    `yaml:"max_artifact_bytes"`
 		MaxStagingBytes        int64    `yaml:"max_staging_bytes"`
 		MaxStagedPackages      int      `yaml:"max_staged_packages"`
@@ -192,13 +198,14 @@ func (c Config) Validate() error {
 			{"staging_directory", c.Plugins.StagingDirectory},
 			{"runtime_directory", c.Plugins.RuntimeDirectory},
 			{"state_directory", c.Plugins.StateDirectory},
+			{"launcher_path", c.Plugins.LauncherPath},
 		} {
 			if !filepath.IsAbs(entry.path) {
 				return fmt.Errorf("plugins.%s must be an absolute path", entry.name)
 			}
 		}
-		if c.Plugins.HostProtocolMajor == 0 || c.Plugins.MaxArtifactBytes < 1 || c.Plugins.MaxStagingBytes < c.Plugins.MaxArtifactBytes || c.Plugins.MaxStagedPackages < 1 || c.Plugins.MaxStagingScanEntries < 1 || c.Plugins.MaxStagedPackages > (c.Plugins.MaxStagingScanEntries-1)/8 || c.Plugins.StagingCleanupInterval.Duration <= 0 || c.Plugins.StagingOrphanGrace.Duration <= 0 || c.Plugins.StagingCleanupLimit < 1 || c.Plugins.StagingCleanupTimeout.Duration <= 0 || c.Plugins.MaxStateEntries < 1 || c.Plugins.MaxStateBytes < 1 || c.Plugins.PollInterval.Duration <= 0 || c.Plugins.OperationTimeout.Duration <= 0 {
-			return fmt.Errorf("plugins requires explicit protocol, staging capacity and cleanup, local state, poll interval, and operation limits")
+		if c.Plugins.HostProtocolMajor == 0 || c.Plugins.MaxOpenFiles < 1 || c.Plugins.MaxProcesses < 1 || c.Plugins.MaxFileBytes < 1 || c.Plugins.MaxAddressSpaceBytes < 1 || c.Plugins.MaxCPUSeconds < 1 || c.Plugins.MaxArtifactBytes < 1 || c.Plugins.MaxStagingBytes < c.Plugins.MaxArtifactBytes || c.Plugins.MaxStagedPackages < 1 || c.Plugins.MaxStagingScanEntries < 1 || c.Plugins.MaxStagedPackages > (c.Plugins.MaxStagingScanEntries-1)/8 || c.Plugins.StagingCleanupInterval.Duration <= 0 || c.Plugins.StagingOrphanGrace.Duration <= 0 || c.Plugins.StagingCleanupLimit < 1 || c.Plugins.StagingCleanupTimeout.Duration <= 0 || c.Plugins.MaxStateEntries < 1 || c.Plugins.MaxStateBytes < 1 || c.Plugins.PollInterval.Duration <= 0 || c.Plugins.OperationTimeout.Duration <= 0 {
+			return fmt.Errorf("plugins requires explicit protocol, process, staging capacity and cleanup, local state, poll interval, and operation limits")
 		}
 		if c.Plugins.MaxConsecutiveFailures == 0 || c.Plugins.InitialFailureBackoff.Duration <= 0 || c.Plugins.MaxFailureBackoff.Duration < c.Plugins.InitialFailureBackoff.Duration {
 			return fmt.Errorf("plugins requires an explicit positive failure limit and ordered failure backoffs")

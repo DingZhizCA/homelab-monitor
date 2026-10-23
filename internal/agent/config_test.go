@@ -76,7 +76,7 @@ func TestLoadConfigRequiresExplicitSecureMetricsBatchSettings(t *testing.T) {
 
 func TestLoadConfigRequiresExplicitSecurePluginRuntimeSettings(t *testing.T) {
 	directory := testutil.TempDir(t)
-	base := "server:\n  url: https://server.example\n  token: device-token\nagent:\n  device_id: n1\n  display_name: N1\nplugins:\n  enabled: true\n  publisher_key_path: " + filepath.Join(directory, "publisher.pub") + "\n  permission_file: " + filepath.Join(directory, "grants.json") + "\n  staging_directory: " + filepath.Join(directory, "staging") + "\n  runtime_directory: " + filepath.Join(directory, "runtime") + "\n  state_directory: " + filepath.Join(directory, "state") + "\n  host_protocol_major: 1\n  max_artifact_bytes: 1048576\n  max_staging_bytes: 16777216\n  max_staged_packages: 16\n  max_staging_scan_entries: 256\n  staging_cleanup_interval: 1h\n  staging_orphan_grace: 24h\n  staging_cleanup_delete_limit: 4\n  staging_cleanup_timeout: 30s\n  max_state_entries: 16\n  max_state_bytes: 1048576\n  poll_interval: 1m\n  operation_timeout: 30s\n  max_consecutive_failures: 5\n  initial_failure_backoff: 1s\n  max_failure_backoff: 5m\n"
+	base := "server:\n  url: https://server.example\n  token: device-token\nagent:\n  device_id: n1\n  display_name: N1\nplugins:\n  enabled: true\n  publisher_key_path: " + filepath.Join(directory, "publisher.pub") + "\n  permission_file: " + filepath.Join(directory, "grants.json") + "\n  staging_directory: " + filepath.Join(directory, "staging") + "\n  runtime_directory: " + filepath.Join(directory, "runtime") + "\n  state_directory: " + filepath.Join(directory, "state") + "\n  launcher_path: " + filepath.Join(directory, "plugin-launcher") + "\n  host_protocol_major: 1\n  max_open_files: 64\n  max_processes: 32\n  max_file_bytes: 1048576\n  max_address_space_bytes: 1073741824\n  max_cpu_seconds: 30\n  max_artifact_bytes: 1048576\n  max_staging_bytes: 16777216\n  max_staged_packages: 16\n  max_staging_scan_entries: 256\n  staging_cleanup_interval: 1h\n  staging_orphan_grace: 24h\n  staging_cleanup_delete_limit: 4\n  staging_cleanup_timeout: 30s\n  max_state_entries: 16\n  max_state_bytes: 1048576\n  poll_interval: 1m\n  operation_timeout: 30s\n  max_consecutive_failures: 5\n  initial_failure_backoff: 1s\n  max_failure_backoff: 5m\n"
 	path := filepath.Join(directory, "agent.yaml")
 	if err := os.WriteFile(path, []byte(base), 0o600); err != nil {
 		t.Fatal(err)
@@ -90,6 +90,12 @@ func TestLoadConfigRequiresExplicitSecurePluginRuntimeSettings(t *testing.T) {
 		strings.Replace(base, "  max_consecutive_failures: 5\n", "", 1),
 		strings.Replace(base, "  initial_failure_backoff: 1s\n", "", 1),
 		strings.Replace(base, "  max_failure_backoff: 5m\n", "", 1),
+		strings.Replace(base, "  launcher_path: "+filepath.Join(directory, "plugin-launcher")+"\n", "", 1),
+		strings.Replace(base, "  max_open_files: 64\n", "", 1),
+		strings.Replace(base, "  max_processes: 32\n", "", 1),
+		strings.Replace(base, "  max_file_bytes: 1048576\n", "", 1),
+		strings.Replace(base, "  max_address_space_bytes: 1073741824\n", "", 1),
+		strings.Replace(base, "  max_cpu_seconds: 30\n", "", 1),
 		strings.Replace(base, "  max_staging_bytes: 16777216\n", "", 1),
 		strings.Replace(base, "  max_staged_packages: 16\n", "", 1),
 		strings.Replace(base, "  max_staging_scan_entries: 256\n", "", 1),

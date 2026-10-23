@@ -65,6 +65,55 @@ func TestExecSupervisorStartsAndStopsPluginProcess(t *testing.T) {
 	}
 }
 
+func TestLimitedExecSupervisorRoutesStartThroughTrustedLauncher(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	launcherDirectory := filepath.Join(root, "bin")
+	if err := os.Mkdir(launcherDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(launcherDirectory, "launcher")
+	launcherScript := "#!/bin/sh\nartifact=\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --artifact ]; then artifact=$2; fi\n  shift 2\ndone\nexec \"$artifact\"\n"
+	if err := os.WriteFile(launcher, []byte(launcherScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	limits := ProcessLimits{
+		MaxOpenFiles: 64, MaxProcesses: 32, MaxFileBytes: 1 << 20,
+		MaxAddressSpaceBytes: 1 << 30, MaxCPUSeconds: 30,
+	}
+	supervisor, err := NewLimitedExecSupervisor(root, launcher, limits)
+	if err != nil {
+		t.Fatalf("create limited supervisor: %v", err)
+	}
+	artifact := writePluginScript(t, root, "#!/bin/sh\n: > \"$HOMELAB_PLUGIN_SOCKET\"\nexec /bin/sleep 30\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	process, err := supervisor.Start(ctx, testProcessSpec(artifact))
+	if err != nil {
+		t.Fatalf("start through launcher: %v", err)
+	}
+	if err := process.Stop(ctx); err != nil {
+		t.Fatalf("stop launched plugin: %v", err)
+	}
+	if err := os.Chmod(launcher, 0o722); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewLimitedExecSupervisor(root, launcher, limits); err == nil {
+		t.Fatal("writable launcher was accepted")
+	}
+	if err := os.Chmod(launcher, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(launcherDirectory, 0o722); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewLimitedExecSupervisor(root, launcher, limits); err == nil {
+		t.Fatal("launcher in a writable parent directory was accepted")
+	}
+}
+
 func TestExecSupervisorKillsPluginAfterStopDeadline(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {

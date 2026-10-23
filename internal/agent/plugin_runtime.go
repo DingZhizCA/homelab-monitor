@@ -29,6 +29,8 @@ type PluginRuntimeConfig struct {
 	StagingDirectory       string
 	RuntimeDirectory       string
 	HostProtocolMajor      uint16
+	LauncherPath           string
+	ProcessLimits          plugins.ProcessLimits
 	MaxArtifactBytes       int64
 	MaxStagingBytes        int64
 	MaxStagedPackages      int
@@ -85,8 +87,8 @@ type PluginRuntime struct {
 
 // NewPluginRuntime assembles plugin control only from explicit trust and resource settings.
 func NewPluginRuntime(config PluginRuntimeConfig) (*PluginRuntime, error) {
-	if strings.TrimSpace(config.DeviceID) == "" || strings.TrimSpace(config.DeviceID) != config.DeviceID || config.HostProtocolMajor == 0 || config.MaxArtifactBytes < 1 || config.MaxStagingBytes < config.MaxArtifactBytes || config.MaxStagedPackages < 1 || config.MaxStagingScanEntries < 1 || config.MaxStagedPackages > (config.MaxStagingScanEntries-1)/8 || config.StagingCleanupInterval <= 0 || config.StagingOrphanGrace <= 0 || config.StagingCleanupLimit < 1 || config.StagingCleanupTimeout <= 0 || config.StagingObserver == nil || config.OperationTimeout <= 0 || !filepath.IsAbs(config.StateDirectory) || config.MaxStateEntries < 1 || config.MaxStateBytes < 1 {
-		return nil, errors.New("plugin identity, protocol, staging, cleanup, operation, and local state limits are required")
+	if strings.TrimSpace(config.DeviceID) == "" || strings.TrimSpace(config.DeviceID) != config.DeviceID || config.HostProtocolMajor == 0 || !filepath.IsAbs(config.LauncherPath) || config.ProcessLimits.Validate() != nil || config.MaxArtifactBytes < 1 || config.MaxStagingBytes < config.MaxArtifactBytes || config.MaxStagedPackages < 1 || config.MaxStagingScanEntries < 1 || config.MaxStagedPackages > (config.MaxStagingScanEntries-1)/8 || config.StagingCleanupInterval <= 0 || config.StagingOrphanGrace <= 0 || config.StagingCleanupLimit < 1 || config.StagingCleanupTimeout <= 0 || config.StagingObserver == nil || config.OperationTimeout <= 0 || !filepath.IsAbs(config.StateDirectory) || config.MaxStateEntries < 1 || config.MaxStateBytes < 1 {
+		return nil, errors.New("plugin identity, protocol, process, staging, cleanup, operation, and local state limits are required")
 	}
 	if config.MaxConsecutiveFailures == 0 || config.InitialFailureBackoff <= 0 || config.MaxFailureBackoff < config.InitialFailureBackoff {
 		return nil, errors.New("plugin retry failure limit and ordered backoffs are required")
@@ -110,7 +112,7 @@ func NewPluginRuntime(config PluginRuntimeConfig) (*PluginRuntime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open plugin package stager: %w", err)
 	}
-	supervisor, err := plugins.NewExecSupervisor(config.RuntimeDirectory)
+	supervisor, err := plugins.NewLimitedExecSupervisor(config.RuntimeDirectory, config.LauncherPath, config.ProcessLimits)
 	if err != nil {
 		_ = stager.Close()
 		return nil, fmt.Errorf("configure plugin process supervisor: %w", err)

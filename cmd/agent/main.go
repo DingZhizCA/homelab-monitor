@@ -19,6 +19,7 @@ import (
 
 	agentpkg "github.com/DingZhizCA/homelab-monitor/internal/agent"
 	"github.com/DingZhizCA/homelab-monitor/internal/metrics"
+	"github.com/DingZhizCA/homelab-monitor/internal/plugins"
 )
 
 const errorLogInterval = time.Minute
@@ -100,6 +101,12 @@ func main() {
 			PublisherKeyPath: config.Plugins.PublisherKeyPath, PermissionFile: config.Plugins.PermissionFile,
 			StagingDirectory: config.Plugins.StagingDirectory, RuntimeDirectory: config.Plugins.RuntimeDirectory, StateDirectory: config.Plugins.StateDirectory,
 			HostProtocolMajor: config.Plugins.HostProtocolMajor, MaxArtifactBytes: config.Plugins.MaxArtifactBytes,
+			LauncherPath: config.Plugins.LauncherPath,
+			ProcessLimits: plugins.ProcessLimits{
+				MaxOpenFiles: config.Plugins.MaxOpenFiles, MaxProcesses: config.Plugins.MaxProcesses,
+				MaxFileBytes: config.Plugins.MaxFileBytes, MaxAddressSpaceBytes: config.Plugins.MaxAddressSpaceBytes,
+				MaxCPUSeconds: config.Plugins.MaxCPUSeconds,
+			},
 			MaxStagingBytes: config.Plugins.MaxStagingBytes, MaxStagedPackages: config.Plugins.MaxStagedPackages,
 			MaxStagingScanEntries:  config.Plugins.MaxStagingScanEntries,
 			StagingCleanupInterval: config.Plugins.StagingCleanupInterval.Duration,
