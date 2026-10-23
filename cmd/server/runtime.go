@@ -80,6 +80,21 @@ type aggregationRuntimeConfig struct {
 	dayRetention    time.Duration
 }
 
+type pluginAggregationRuntimeConfig struct {
+	interval        time.Duration
+	maxObservations int
+	maxScanned      int
+	rawRetention    time.Duration
+	timeout         time.Duration
+	minuteRetention time.Duration
+	hourRetention   time.Duration
+	dayRetention    time.Duration
+}
+
+func (c pluginAggregationRuntimeConfig) disabled() bool {
+	return c.interval == 0 && c.maxObservations == 0 && c.maxScanned == 0 && c.timeout == 0
+}
+
 func (c aggregationRuntimeConfig) disabled() bool {
 	return c.interval == 0 && c.maxSnapshots == 0 && c.timeout == 0 && c.minuteRetention == 0 && c.hourRetention == 0 && c.dayRetention == 0
 }
@@ -271,7 +286,7 @@ func logRetentionObservation(observation storage.RetentionObservation) {
 		log.Printf("component=storage level=ERROR raw_cutoff=%q receipt_cutoff=%q duration=%q msg=%q", observation.RawCutoff, observation.ReceiptCutoff, observation.Duration, observation.Err)
 		return
 	}
-	log.Printf("component=storage level=INFO raw_cutoff=%q receipt_cutoff=%q deleted_snapshots=%d deleted_receipts=%d deleted_minute=%d deleted_hour=%d deleted_day=%d duration=%q msg=%q", observation.RawCutoff, observation.ReceiptCutoff, observation.DeletedSnapshots, observation.DeletedReceipts, observation.DeletedMinute, observation.DeletedHour, observation.DeletedDay, observation.Duration, "bounded metric retention completed")
+	log.Printf("component=storage level=INFO raw_cutoff=%q receipt_cutoff=%q deleted_snapshots=%d deleted_receipts=%d deleted_plugin_observations=%d deleted_plugin_receipts=%d deleted_minute=%d deleted_hour=%d deleted_day=%d deleted_plugin_minute=%d deleted_plugin_hour=%d deleted_plugin_day=%d duration=%q msg=%q", observation.RawCutoff, observation.ReceiptCutoff, observation.DeletedSnapshots, observation.DeletedReceipts, observation.DeletedPluginObservations, observation.DeletedPluginReceipts, observation.DeletedMinute, observation.DeletedHour, observation.DeletedDay, observation.DeletedPluginMinute, observation.DeletedPluginHour, observation.DeletedPluginDay, observation.Duration, "bounded metric retention completed")
 }
 
 func buildAggregationRuntime(databases *storage.Databases, config aggregationRuntimeConfig) (*storage.MetricAggregationManager, error) {
@@ -295,6 +310,30 @@ func logAggregationObservation(observation storage.AggregationObservation) {
 		level = "ERROR"
 	}
 	log.Printf("component=storage level=%s processed_snapshots=%d updated_buckets=%d pending_snapshots=%d duration=%q error=%q msg=%q", level, observation.ProcessedSnapshots, observation.UpdatedBuckets, observation.PendingSnapshots, observation.Duration, observation.Err, "bounded metric aggregation completed")
+}
+
+func buildPluginAggregationRuntime(databases *storage.Databases, config pluginAggregationRuntimeConfig) (*storage.PluginMetricAggregationManager, error) {
+	if config.disabled() {
+		return nil, nil
+	}
+	if databases == nil {
+		return nil, errors.New("storage-dir and all positive plugin aggregation settings are required together")
+	}
+	if config.interval <= 0 || config.maxObservations < 1 || config.maxScanned < 1 || config.rawRetention <= 0 || config.timeout <= 0 || config.minuteRetention <= config.rawRetention || config.hourRetention <= config.minuteRetention || config.dayRetention <= config.hourRetention {
+		return nil, errors.New("storage-dir, positive plugin aggregation bounds, and increasing raw, minute, hour, and day retention windows are required together")
+	}
+	return storage.NewPluginMetricAggregationManager(databases.Metrics, storage.PluginAggregationConfig{
+		Interval: config.interval, MaxObservations: config.maxObservations, MaxScanned: config.maxScanned,
+		RawRetention: config.rawRetention, Timeout: config.timeout,
+	}, logPluginAggregationObservation)
+}
+
+func logPluginAggregationObservation(observation storage.PluginAggregationObservation) {
+	level := "INFO"
+	if observation.Err != nil {
+		level = "ERROR"
+	}
+	log.Printf("component=storage level=%s processed_observations=%d scanned_observations=%d updated_series=%d pending_observations=%d duration=%q error=%q msg=%q", level, observation.ProcessedObservations, observation.ScannedObservations, observation.UpdatedSeries, observation.PendingObservations, observation.Duration, observation.Err, "bounded plugin metric aggregation completed")
 }
 
 func buildSpaceRecoveryRuntime(databases *storage.Databases, config spaceRecoveryRuntimeConfig) (*storage.SpaceRecoveryManager, error) {
@@ -394,14 +433,20 @@ func buildMetricBatchRuntime(databases *storage.Databases, api *server.Handler, 
 	return server.NewMetricsBatchHandler(api, writer, config.maxSnapshots, config.maxBodyBytes)
 }
 
-func buildPluginMetricHistoryRuntime(databases *storage.Databases, authRuntime *authRuntime, maxScanned int, budget pluginmetrics.HistoryBudget) (*server.PluginMetricHistoryHandler, error) {
+func buildPluginMetricHistoryRuntime(databases *storage.Databases, authRuntime *authRuntime, maxScanned int, budget pluginmetrics.HistoryBudget, tiers *storage.HistoryTierPolicy) (*server.PluginMetricHistoryHandler, error) {
 	if maxScanned == 0 {
 		return nil, nil
 	}
 	if databases == nil || authRuntime == nil || maxScanned < 1 || budget.MaxRange <= 0 || budget.MaxPoints < 1 {
 		return nil, errors.New("storage, human authentication, history budgets, and a positive plugin observation scan limit are required together")
 	}
-	source, err := storage.NewPluginMetricHistorySource(databases.Metrics, maxScanned)
+	var source *storage.PluginMetricHistorySource
+	var err error
+	if tiers == nil {
+		source, err = storage.NewPluginMetricHistorySource(databases.Metrics, maxScanned)
+	} else {
+		source, err = storage.NewTieredPluginMetricHistorySource(databases.Metrics, maxScanned, *tiers)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -43,12 +43,15 @@ type HistoryRequest struct {
 
 // HistoricalPoint retains typed JSON values and label dimensions.
 type HistoricalPoint struct {
-	ObservedAt time.Time         `json:"observed_at"`
-	Type       string            `json:"type"`
-	Unit       string            `json:"unit"`
-	Value      json.RawMessage   `json:"value"`
-	Quality    string            `json:"quality"`
-	Labels     map[string]string `json:"labels,omitempty"`
+	ObservedAt        time.Time         `json:"observed_at"`
+	Type              string            `json:"type"`
+	Unit              string            `json:"unit"`
+	Value             json.RawMessage   `json:"value,omitempty"`
+	Summary           json.RawMessage   `json:"summary,omitempty"`
+	Quality           string            `json:"quality"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	ResolutionSeconds int               `json:"resolution_seconds"`
+	AggregationKind   string            `json:"aggregation_kind"`
 }
 
 // HistoryResult echoes the exact structured identity selected by the caller.
@@ -107,11 +110,12 @@ func (s *HistoryService) Query(ctx context.Context, principal auth.Principal, re
 	points = append([]HistoricalPoint(nil), points...)
 	for index := range points {
 		point := &points[index]
-		if point.ObservedAt.IsZero() || point.ObservedAt.Before(request.From) || !point.ObservedAt.Before(request.To) || !json.Valid(point.Value) || strings.TrimSpace(point.Unit) == "" || !validType(point.Type) || !validQuality(point.Quality) {
+		if point.ObservedAt.IsZero() || point.ObservedAt.Before(request.From) || !point.ObservedAt.Before(request.To) || strings.TrimSpace(point.Unit) == "" || !validType(point.Type) || !validQuality(point.Quality) || !validPointPayload(*point) {
 			return HistoryResult{}, ErrInvalidPoint
 		}
 		point.ObservedAt = point.ObservedAt.UTC()
 		point.Value = append(json.RawMessage(nil), point.Value...)
+		point.Summary = append(json.RawMessage(nil), point.Summary...)
 		point.Labels = cloneLabels(point.Labels)
 	}
 	sort.SliceStable(points, func(i, j int) bool {
@@ -121,6 +125,14 @@ func (s *HistoryService) Query(ctx context.Context, principal auth.Principal, re
 		return points[i].ObservedAt.Before(points[j].ObservedAt)
 	})
 	return HistoryResult{DeviceID: request.DeviceID, PluginID: request.PluginID, PluginVersion: request.PluginVersion, CollectorID: request.CollectorID, MetricID: request.MetricID, From: request.From, To: request.To, Points: points}, nil
+}
+
+func validPointPayload(point HistoricalPoint) bool {
+	if point.AggregationKind == "raw" {
+		return point.ResolutionSeconds == 0 && json.Valid(point.Value) && len(point.Summary) == 0
+	}
+	expected := map[string]string{"gauge": "gauge_summary", "counter": "counter_delta", "state": "state_summary", "event": "event_count"}[point.Type]
+	return point.ResolutionSeconds > 0 && point.AggregationKind == expected && len(point.Value) == 0 && json.Valid(point.Summary)
 }
 
 func validateRequest(request HistoryRequest, budget HistoryBudget) error {

@@ -37,6 +37,9 @@ type RetentionObservation struct {
 	DeletedMinute             int64
 	DeletedHour               int64
 	DeletedDay                int64
+	DeletedPluginMinute       int64
+	DeletedPluginHour         int64
+	DeletedPluginDay          int64
 	Duration                  time.Duration
 	Err                       error
 }
@@ -120,9 +123,13 @@ func (m *MetricRetentionManager) Cleanup(ctx context.Context) RetentionObservati
 	}
 	result, err = transaction.ExecContext(operationContext, `DELETE FROM plugin_metric_observations
 		WHERE rowid IN (
-			SELECT rowid FROM plugin_metric_observations
-			WHERE observed_at < ?
-			ORDER BY observed_at, batch_id, sequence
+			SELECT observations.rowid FROM plugin_metric_observations AS observations
+			WHERE observations.observed_at < ?
+				AND NOT EXISTS (
+					SELECT 1 FROM plugin_metric_aggregation_pending AS pending
+					WHERE pending.batch_id = observations.batch_id AND pending.sequence = observations.sequence
+				)
+			ORDER BY observations.observed_at, observations.batch_id, observations.sequence
 			LIMIT ?
 		)`, storageTimestamp(observation.RawCutoff), m.config.DeleteLimit)
 	if err != nil {
@@ -136,10 +143,11 @@ func (m *MetricRetentionManager) Cleanup(ctx context.Context) RetentionObservati
 	}
 	if configHasAggregateRetention(m.config) {
 		for _, tier := range []struct {
-			resolution int
-			retention  time.Duration
-			deleted    *int64
-		}{{minuteResolution, m.config.MinuteRetention, &observation.DeletedMinute}, {hourResolution, m.config.HourRetention, &observation.DeletedHour}, {dayResolution, m.config.DayRetention, &observation.DeletedDay}} {
+			resolution    int
+			retention     time.Duration
+			deleted       *int64
+			pluginDeleted *int64
+		}{{minuteResolution, m.config.MinuteRetention, &observation.DeletedMinute, &observation.DeletedPluginMinute}, {hourResolution, m.config.HourRetention, &observation.DeletedHour, &observation.DeletedPluginHour}, {dayResolution, m.config.DayRetention, &observation.DeletedDay, &observation.DeletedPluginDay}} {
 			result, err = transaction.ExecContext(operationContext, `DELETE FROM metric_aggregates WHERE rowid IN (
 				SELECT rowid FROM metric_aggregates
 				WHERE resolution_seconds = ? AND bucket_start < ?
@@ -153,6 +161,21 @@ func (m *MetricRetentionManager) Cleanup(ctx context.Context) RetentionObservati
 			*tier.deleted, err = result.RowsAffected()
 			if err != nil {
 				observation.Err = fmt.Errorf("count deleted %d-second metric aggregates: %w", tier.resolution, err)
+				return m.finish(started, observation)
+			}
+			result, err = transaction.ExecContext(operationContext, `DELETE FROM plugin_metric_aggregates WHERE rowid IN (
+				SELECT rowid FROM plugin_metric_aggregates
+				WHERE resolution_seconds = ? AND bucket_start < ?
+				ORDER BY bucket_start, device_id, plugin_id, plugin_version, collector_id, metric_id, labels_json
+				LIMIT ?
+			)`, tier.resolution, storageTimestamp(now.Add(-tier.retention)), m.config.DeleteLimit)
+			if err != nil {
+				observation.Err = fmt.Errorf("delete expired %d-second plugin metric aggregates: %w", tier.resolution, err)
+				return m.finish(started, observation)
+			}
+			*tier.pluginDeleted, err = result.RowsAffected()
+			if err != nil {
+				observation.Err = fmt.Errorf("count deleted %d-second plugin metric aggregates: %w", tier.resolution, err)
 				return m.finish(started, observation)
 			}
 		}
@@ -205,6 +228,9 @@ func (m *MetricRetentionManager) Cleanup(ctx context.Context) RetentionObservati
 		observation.DeletedMinute = 0
 		observation.DeletedHour = 0
 		observation.DeletedDay = 0
+		observation.DeletedPluginMinute = 0
+		observation.DeletedPluginHour = 0
+		observation.DeletedPluginDay = 0
 		observation.Err = fmt.Errorf("commit metric retention: %w", err)
 	}
 	return m.finish(started, observation)

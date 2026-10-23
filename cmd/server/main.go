@@ -90,6 +90,10 @@ func run() error {
 	aggregationInterval := flag.Duration("storage-aggregation-interval", 0, "interval between bounded metric aggregation transactions")
 	aggregationMaxSnapshots := flag.Int("storage-aggregation-max-snapshots", 0, "maximum raw snapshots aggregated per transaction")
 	aggregationTimeout := flag.Duration("storage-aggregation-timeout", 0, "timeout for each metric aggregation transaction")
+	pluginAggregationInterval := flag.Duration("storage-plugin-aggregation-interval", 0, "interval between bounded plugin metric aggregation transactions")
+	pluginAggregationMaxObservations := flag.Int("storage-plugin-aggregation-max-observations", 0, "maximum queued plugin observations aggregated per transaction")
+	pluginAggregationMaxScanned := flag.Int("storage-plugin-aggregation-max-scanned", 0, "maximum raw plugin observations scanned per aggregation transaction")
+	pluginAggregationTimeout := flag.Duration("storage-plugin-aggregation-timeout", 0, "timeout for each plugin metric aggregation transaction")
 	minuteRetention := flag.Duration("storage-minute-retention", 0, "retention and query window for minute metric aggregates")
 	hourRetention := flag.Duration("storage-hour-retention", 0, "retention and query window for hour metric aggregates")
 	dayRetention := flag.Duration("storage-day-retention", 0, "retention and query window for day metric aggregates")
@@ -162,8 +166,19 @@ func run() error {
 		interval: *aggregationInterval, maxSnapshots: *aggregationMaxSnapshots, timeout: *aggregationTimeout,
 		minuteRetention: *minuteRetention, hourRetention: *hourRetention, dayRetention: *dayRetention,
 	}
+	pluginAggregationConfig := pluginAggregationRuntimeConfig{
+		interval: *pluginAggregationInterval, maxObservations: *pluginAggregationMaxObservations,
+		maxScanned: *pluginAggregationMaxScanned, rawRetention: *rawRetention, timeout: *pluginAggregationTimeout,
+		minuteRetention: *minuteRetention, hourRetention: *hourRetention, dayRetention: *dayRetention,
+	}
 	if !aggregationConfig.disabled() && !authConfig.disabled() {
 		authConfig.historyTiers = &storage.HistoryTierPolicy{
+			RawWindow: *rawRetention, MinuteWindow: *minuteRetention, HourWindow: *hourRetention, DayWindow: *dayRetention,
+		}
+	}
+	var pluginHistoryTiers *storage.HistoryTierPolicy
+	if !pluginAggregationConfig.disabled() && !authConfig.disabled() {
+		pluginHistoryTiers = &storage.HistoryTierPolicy{
 			RawWindow: *rawRetention, MinuteWindow: *minuteRetention, HourWindow: *hourRetention, DayWindow: *dayRetention,
 		}
 	}
@@ -232,6 +247,13 @@ func run() error {
 	if aggregationManager != nil && retentionManager == nil {
 		return errors.New("metric aggregation requires configured metric retention")
 	}
+	pluginAggregationManager, err := buildPluginAggregationRuntime(databases, pluginAggregationConfig)
+	if err != nil {
+		return err
+	}
+	if pluginAggregationManager != nil && retentionManager == nil {
+		return errors.New("plugin metric aggregation requires configured metric retention")
+	}
 	spaceRecoveryManager, err := buildSpaceRecoveryRuntime(databases, spaceRecoveryRuntimeConfig{
 		interval: *spaceRecoveryInterval, timeout: *spaceRecoveryTimeout, walTruncateBytes: *walTruncateBytes,
 		vacuumMinFreePages: *vacuumMinFreePages, vacuumMaxPages: *vacuumMaxPages,
@@ -268,7 +290,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	pluginMetricHistory, err := buildPluginMetricHistoryRuntime(databases, humanAuth, *pluginHistoryMaxScanned, pluginmetrics.HistoryBudget{MaxRange: *historyMaxRange, MaxPoints: *historyMaxPoints})
+	pluginMetricHistory, err := buildPluginMetricHistoryRuntime(databases, humanAuth, *pluginHistoryMaxScanned, pluginmetrics.HistoryBudget{MaxRange: *historyMaxRange, MaxPoints: *historyMaxPoints}, pluginHistoryTiers)
 	if err != nil {
 		return err
 	}
@@ -371,6 +393,18 @@ func run() error {
 		aggregationDone := make(chan struct{})
 		go func() {
 			aggregationManager.Run(aggregationContext)
+			close(aggregationDone)
+		}()
+		defer func() {
+			cancelAggregation()
+			<-aggregationDone
+		}()
+	}
+	if pluginAggregationManager != nil {
+		aggregationContext, cancelAggregation := context.WithCancel(ctx)
+		aggregationDone := make(chan struct{})
+		go func() {
+			pluginAggregationManager.Run(aggregationContext)
 			close(aggregationDone)
 		}()
 		defer func() {

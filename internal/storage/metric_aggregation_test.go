@@ -152,6 +152,11 @@ func TestMetricRetentionDeletesEachExpiredAggregateTier(t *testing.T) {
 			VALUES (?, ?, 'node-a', 'cpu.usage_percent', '{}', 1, 1, 10, 10, 10, 10, ?)`, resolution, storageTimestamp(now.Add(-40*24*time.Hour)), storageTimestamp(now.Add(-40*24*time.Hour))); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := databases.Metrics.Exec(`INSERT INTO plugin_metric_aggregates
+			(resolution_seconds, bucket_start, device_id, plugin_id, plugin_version, collector_id, metric_id, metric_type, unit, labels_json, aggregation_kind, summary_json, quality, sample_count, first_observed_at, last_observed_at)
+			VALUES (?, ?, 'node-a', 'smart', '1.0.0', 'temperature', 'temperature', 'gauge', 'celsius', '{}', 'gauge_summary', '{"mean":10}', 'estimated', 1, ?, ?)`, resolution, storageTimestamp(now.Add(-40*24*time.Hour)), storageTimestamp(now.Add(-40*24*time.Hour)), storageTimestamp(now.Add(-40*24*time.Hour))); err != nil {
+			t.Fatal(err)
+		}
 	}
 	manager, err := NewMetricRetentionManager(databases.Metrics, RetentionConfig{
 		Interval: time.Hour, RawRetention: time.Hour, ReceiptRetention: 60 * 24 * time.Hour,
@@ -163,7 +168,7 @@ func TestMetricRetentionDeletesEachExpiredAggregateTier(t *testing.T) {
 	}
 	manager.now = func() time.Time { return now }
 	result := manager.Cleanup(context.Background())
-	if result.Err != nil || result.DeletedMinute != 1 || result.DeletedHour != 1 || result.DeletedDay != 1 {
+	if result.Err != nil || result.DeletedMinute != 1 || result.DeletedHour != 1 || result.DeletedDay != 1 || result.DeletedPluginMinute != 1 || result.DeletedPluginHour != 1 || result.DeletedPluginDay != 1 {
 		t.Fatalf("aggregate retention=%+v", result)
 	}
 }

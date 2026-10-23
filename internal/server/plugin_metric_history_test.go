@@ -26,7 +26,7 @@ func (f pluginHistorySourceFake) QueryPluginHistory(context.Context, pluginmetri
 func TestPluginMetricHistoryRouteRequiresSession(t *testing.T) {
 	fixture := newAuthTestFixture(t)
 	from := time.Date(2026, 10, 23, 1, 0, 0, 0, time.UTC)
-	service, err := pluginmetrics.NewHistoryService(pluginHistorySourceFake{[]pluginmetrics.HistoricalPoint{{ObservedAt: from.Add(time.Minute), Type: "gauge", Unit: "celsius", Value: json.RawMessage(`42`), Quality: "valid"}}}, pluginmetrics.HistoryBudget{MaxRange: time.Hour, MaxPoints: 10})
+	service, err := pluginmetrics.NewHistoryService(pluginHistorySourceFake{[]pluginmetrics.HistoricalPoint{{ObservedAt: from.Add(time.Minute), Type: "gauge", Unit: "celsius", Value: json.RawMessage(`42`), Quality: "valid", AggregationKind: "raw"}}}, pluginmetrics.HistoryBudget{MaxRange: time.Hour, MaxPoints: 10})
 	if err != nil {
 		t.Fatal(err)
 	}

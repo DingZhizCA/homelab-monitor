@@ -22,7 +22,7 @@ func (f historySourceFake) QueryPluginHistory(context.Context, HistoryRequest) (
 func TestHistoryServiceBoundsAndReturnsStructuredIdentity(t *testing.T) {
 	from := time.Date(2026, 10, 23, 1, 0, 0, 0, time.UTC)
 	value := json.RawMessage(`42`)
-	service, err := NewHistoryService(historySourceFake{[]HistoricalPoint{{ObservedAt: from.Add(time.Minute), Type: "gauge", Unit: "celsius", Value: value, Quality: "valid", Labels: map[string]string{"disk": "sda"}}}}, HistoryBudget{MaxRange: time.Hour, MaxPoints: 10})
+	service, err := NewHistoryService(historySourceFake{[]HistoricalPoint{{ObservedAt: from.Add(time.Minute), Type: "gauge", Unit: "celsius", Value: value, Quality: "valid", Labels: map[string]string{"disk": "sda"}, AggregationKind: "raw"}}}, HistoryBudget{MaxRange: time.Hour, MaxPoints: 10})
 	if err != nil {
 		t.Fatal(err)
 	}

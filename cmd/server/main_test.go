@@ -38,10 +38,10 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if handler, err := buildPluginMetricBatchRuntime(nil, nil, pluginMetricBatchRuntimeConfig{}); err != nil || handler != nil {
 		t.Fatalf("disabled plugin metric handler=%v err=%v", handler, err)
 	}
-	if handler, err := buildPluginMetricHistoryRuntime(nil, nil, 0, pluginmetrics.HistoryBudget{}); err != nil || handler != nil {
+	if handler, err := buildPluginMetricHistoryRuntime(nil, nil, 0, pluginmetrics.HistoryBudget{}, nil); err != nil || handler != nil {
 		t.Fatalf("disabled plugin history handler=%v err=%v", handler, err)
 	}
-	if handler, err := buildPluginMetricHistoryRuntime(nil, nil, 1, pluginmetrics.HistoryBudget{MaxRange: time.Hour, MaxPoints: 10}); err == nil || handler != nil {
+	if handler, err := buildPluginMetricHistoryRuntime(nil, nil, 1, pluginmetrics.HistoryBudget{MaxRange: time.Hour, MaxPoints: 10}, nil); err == nil || handler != nil {
 		t.Fatalf("partial plugin history handler=%v err=%v", handler, err)
 	}
 	if runtime, err := buildAuthRuntime(nil, nil, authRuntimeConfig{}); err != nil || runtime != nil {
@@ -64,6 +64,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	}
 	if manager, err := buildAggregationRuntime(nil, aggregationRuntimeConfig{}); err != nil || manager != nil {
 		t.Fatalf("disabled aggregation manager=%v err=%v", manager, err)
+	}
+	if manager, err := buildPluginAggregationRuntime(nil, pluginAggregationRuntimeConfig{}); err != nil || manager != nil {
+		t.Fatalf("disabled plugin aggregation manager=%v err=%v", manager, err)
 	}
 	if manager, err := buildSpaceRecoveryRuntime(nil, spaceRecoveryRuntimeConfig{}); err != nil || manager != nil {
 		t.Fatalf("disabled space recovery manager=%v err=%v", manager, err)
@@ -108,6 +111,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	}
 	if manager, err := buildAggregationRuntime(nil, aggregationRuntimeConfig{interval: time.Second}); err == nil || manager != nil {
 		t.Fatalf("partial aggregation manager=%v err=%v", manager, err)
+	}
+	if manager, err := buildPluginAggregationRuntime(nil, pluginAggregationRuntimeConfig{interval: time.Second}); err == nil || manager != nil {
+		t.Fatalf("partial plugin aggregation manager=%v err=%v", manager, err)
 	}
 	if manager, err := buildSpaceRecoveryRuntime(nil, spaceRecoveryRuntimeConfig{interval: time.Second}); err == nil || manager != nil {
 		t.Fatalf("partial space recovery manager=%v err=%v", manager, err)
@@ -167,6 +173,24 @@ func TestBuildAggregationRuntimeRequiresCompletePolicyForStorage(t *testing.T) {
 	})
 	if err != nil || manager == nil {
 		t.Fatalf("aggregation manager=%v err=%v", manager, err)
+	}
+}
+
+func TestBuildPluginAggregationRuntimeRequiresCompletePolicyForStorage(t *testing.T) {
+	databases, err := openServerStorage(context.Background(), filepath.Join(testutil.TempDir(t), "storage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = databases.Close() })
+	if manager, err := buildPluginAggregationRuntime(databases, pluginAggregationRuntimeConfig{}); err != nil || manager != nil {
+		t.Fatalf("disabled plugin aggregation manager=%v err=%v", manager, err)
+	}
+	manager, err := buildPluginAggregationRuntime(databases, pluginAggregationRuntimeConfig{
+		interval: time.Minute, maxObservations: 100, maxScanned: 1000, rawRetention: time.Hour, timeout: time.Second,
+		minuteRetention: 2 * time.Hour, hourRetention: 48 * time.Hour, dayRetention: 30 * 24 * time.Hour,
+	})
+	if err != nil || manager == nil {
+		t.Fatalf("plugin aggregation manager=%v err=%v", manager, err)
 	}
 }
 

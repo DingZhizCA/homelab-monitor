@@ -137,6 +137,50 @@ var metricMigrations = []Migration{
 		SQL: `CREATE INDEX plugin_metric_observations_history
 		ON plugin_metric_observations (device_id, plugin_id, plugin_version, collector_id, observed_at, batch_id, sequence);`,
 	},
+	{
+		Version: 7,
+		Name:    "plugin_metric_aggregation",
+		SQL: `CREATE TABLE plugin_metric_aggregation_control (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+	);
+	INSERT INTO plugin_metric_aggregation_control (id, enabled) VALUES (1, 0);
+	CREATE TABLE plugin_metric_aggregation_pending (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		batch_id TEXT NOT NULL,
+		sequence INTEGER NOT NULL,
+		UNIQUE (batch_id, sequence),
+		FOREIGN KEY (batch_id, sequence) REFERENCES plugin_metric_observations(batch_id, sequence) ON DELETE RESTRICT
+	);
+	CREATE TRIGGER plugin_metric_observations_enqueue_aggregation
+	AFTER INSERT ON plugin_metric_observations WHEN (SELECT enabled FROM plugin_metric_aggregation_control WHERE id = 1) = 1
+	BEGIN
+		INSERT INTO plugin_metric_aggregation_pending (batch_id, sequence) VALUES (NEW.batch_id, NEW.sequence);
+	END;
+	CREATE TABLE plugin_metric_aggregates (
+		resolution_seconds INTEGER NOT NULL CHECK (resolution_seconds IN (60, 3600, 86400)),
+		bucket_start TEXT NOT NULL,
+		device_id TEXT NOT NULL,
+		plugin_id TEXT NOT NULL,
+		plugin_version TEXT NOT NULL,
+		collector_id TEXT NOT NULL,
+		metric_id TEXT NOT NULL,
+		metric_type TEXT NOT NULL CHECK (metric_type IN ('gauge', 'counter', 'state', 'event')),
+		unit TEXT NOT NULL,
+		labels_json TEXT NOT NULL,
+		aggregation_kind TEXT NOT NULL CHECK (aggregation_kind IN ('gauge_summary', 'counter_delta', 'state_summary', 'event_count')),
+		summary_json BLOB NOT NULL,
+		quality TEXT NOT NULL CHECK (quality IN ('estimated', 'partial')),
+		sample_count INTEGER NOT NULL CHECK (sample_count > 0),
+		first_observed_at TEXT NOT NULL,
+		last_observed_at TEXT NOT NULL,
+		PRIMARY KEY (resolution_seconds, bucket_start, device_id, plugin_id, plugin_version, collector_id, metric_id, metric_type, unit, labels_json)
+	);
+	CREATE INDEX plugin_metric_aggregates_query
+		ON plugin_metric_aggregates (device_id, plugin_id, plugin_version, collector_id, metric_id, resolution_seconds, bucket_start);
+	CREATE INDEX plugin_metric_aggregates_retention
+		ON plugin_metric_aggregates (resolution_seconds, bucket_start);`,
+	},
 }
 
 // MetricBatchWriter atomically persists and deduplicates bounded metric batches.
