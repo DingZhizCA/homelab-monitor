@@ -151,6 +151,20 @@ export interface PluginHistoricalMetricResult {
   points: PluginHistoricalPoint[]
 }
 
+/** Current transition state for one evaluated alert-rule revision. */
+export interface IncidentState {
+  device_id: string
+  rule_id: string
+  rule_revision: number
+  status: 'inactive' | 'pending' | 'firing' | 'recovering' | 'resolved'
+  pending_since?: string
+  firing_since?: string
+  recovering_since?: string
+  resolved_at?: string
+  last_evaluated_at: string
+  last_evaluation: 'true' | 'false' | 'unknown' | 'disabled'
+}
+
 /** Lifecycle state for one explicitly authorized disk-capacity refresh. */
 export interface RefreshJob {
   request_id: string

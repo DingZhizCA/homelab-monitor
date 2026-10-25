@@ -38,7 +38,7 @@ Owner 可以管理规则和告警版本；Owner 与 Viewer 可通过 HTTPS Sessi
 
 `AdvanceIncident` 提供无存储副作用的状态转移函数，覆盖 Inactive/Pending/Firing/Recovering/Resolved；待触发和恢复时长、Unknown 行为、Disabled 行为都必须由调用方显式提供。两个时长都使用必填指针，nil 会被拒绝；显式零时长表示对应状态立即越过，不隐含任何产品默认值。`hold` 保留原时间戳（等待期间墙钟仍继续计时），`reset_pending` 清除 Pending 或将 Recovering 还原为 Firing，`resolve` 关闭活动状态；Unknown 与 Disabled 的策略可分别设置。函数、SQLite 仓储和调度器都拒绝乱序评估及隐式 Rule Revision 迁移。规则删除或旧 Incident 迁移、通知去重/静默/订阅/失败重试仍未实现。
 
-`MemoryIncidentRepository` 保留给开发和单元测试；`storage.IncidentRepository` 将相同的有界当前状态保存到 `core.db`。两者构造时都必须显式给出最大规则状态数，每次推进携带预期的上一评估时间并执行 CAS；相同时间、结果和 Revision 的重试幂等，不同并发推进只有一个成功。容量满时拒绝新规则状态，不淘汰既有状态；规则 Revision 变化明确返回迁移错误。SQLite 仓储经过进程关闭重开测试，并由显式启用的评估调度器装配。相同运行时把该仓储注入 `IncidentService` 和只读 HTTP Handler；`GET /api/v1/alerts/incidents` 要求有效 Owner 或 Viewer HTTPS Session，并且查询参数只能包含一个非空、已裁剪的 `device_id`。返回值按 Rule ID 稳定排序，只表示每条规则的当前转换状态；查询不会推进评估、触发采集或推断历史。仓储仍不清理已解决状态或生成通知。
+`MemoryIncidentRepository` 保留给开发和单元测试；`storage.IncidentRepository` 将相同的有界当前状态保存到 `core.db`。两者构造时都必须显式给出最大规则状态数，每次推进携带预期的上一评估时间并执行 CAS；相同时间、结果和 Revision 的重试幂等，不同并发推进只有一个成功。容量满时拒绝新规则状态，不淘汰既有状态；规则 Revision 变化明确返回迁移错误。SQLite 仓储经过进程关闭重开测试，并由显式启用的评估调度器装配。相同运行时把该仓储注入 `IncidentService` 和只读 HTTP Handler；`GET /api/v1/alerts/incidents` 要求有效 Owner 或 Viewer HTTPS Session，并且查询参数只能包含一个非空、已裁剪的 `device_id`。返回值按 Rule ID 稳定排序，只表示每条规则的当前转换状态；查询不会推进评估、触发采集或推断历史。Web 告警页按同一设备范围展示状态、最近评估结果和转换时间，只在进入、切换设备或手动刷新时查询。仓储仍不清理已解决状态或生成通知。
 
 `Engine` 以同步单轮执行为核心，由 Server 生命周期启动和停止。每轮具有显式超时与全局规则数上限，规则仓储按 `(device_id, rule_id)` 稳定游标在 SQLite 查询阶段分页，避免先无界载入再截断；下一轮从上次位置继续并在末尾回绕，防止排序靠后的规则长期饥饿。设备枚举、规则读取、样本转换、表达式评估和 Incident CAS 的失败均形成结构化观察；单条规则失败不会中止其他规则。当前规则 Revision 与已有 Incident Revision 不一致时保留旧状态并报告错误，不静默重置活动 Incident。调度首次启动立即执行一轮，之后按显式周期串行运行，不会产生重叠轮次。
 

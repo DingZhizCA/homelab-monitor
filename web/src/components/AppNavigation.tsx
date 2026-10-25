@@ -1,16 +1,17 @@
 /**
  * Home Lab Monitor 的一级页面导航。
- * 当前仅开放已有数据支持的概览与网络接口视图。
+ * 只展示当前身份可访问且已有数据边界支持的一级视图。
  */
-import { Activity, ChartNoAxesCombined, LayoutDashboard, Network, Settings } from 'lucide-react'
+import { Activity, BellRing, ChartNoAxesCombined, LayoutDashboard, Network, Settings } from 'lucide-react'
 
-export type AppPage = 'dashboard' | 'dashboards' | 'network' | 'explore' | 'settings'
+export type AppPage = 'dashboard' | 'dashboards' | 'network' | 'explore' | 'alerts' | 'settings'
 
 const pages: { id: AppPage; label: string; icon: typeof Activity; ownerOnly?: boolean; authOnly?: boolean }[] = [
   { id: 'dashboard', label: '概览', icon: Activity },
   { id: 'dashboards', label: '仪表盘', icon: LayoutDashboard, authOnly: true },
   { id: 'network', label: '网络接口', icon: Network },
   { id: 'explore', label: '临时对比', icon: ChartNoAxesCombined },
+  { id: 'alerts', label: '告警', icon: BellRing, authOnly: true },
   { id: 'settings', label: '账户', icon: Settings, ownerOnly: true },
 ]
 
