@@ -44,6 +44,7 @@
 | ADR-032 | 插件类型化分层聚合 | 插件聚合键保留 device/plugin/version/collector/metric/type/unit/labels；Gauge 保存 mean/min/max/last，Counter 保存按时间排序的 delta/first/last/reset count，State 保存 last/transition count，Event 保存 event count。每个返回点显式区分 `raw` 与聚合种类并携带 `resolution_seconds`；聚合器在原始窗口内按桶重算以正确处理乱序，长桶按时间增量合并，运行中途建立且缺少桶前段的摘要标记 `partial`。没有完整重算来源的过旧乱序数据明确失败而不静默改写。周期、队列数、扫描数、超时和四层保留窗口均须显式配置 | 2026-10-23 用户选择 A 后实施 |
 | ADR-033 | 已观测插件 Descriptor Catalog | 当前插件 Descriptor 只有 metric/type/unit/label keys，Server 可从 Agent 已按运行时 Descriptor 验证的规范化观测无损重建。目录以 device/plugin/version/collector/metric 为键，与观测同事务登记；同一键的类型、单位或 label keys 漂移使整批回滚。认证目录只展示实际出现过数据的 Schema，并受显式每设备条数上限约束；首次成功观测前不可见，将来增加名称、说明等非观测字段时再引入独立发布协议 | 2026-10-23 按推荐实施 |
 | ADR-034 | Web 插件历史浏览 | Explore 以已观测 Descriptor Catalog 构造 device/plugin/version/collector/metric 精确选择器，不跨版本合并，也不触发 Collector。结果按 `aggregation_kind` 映射类型化摘要：Gauge 绘制 mean、Counter 绘制 delta、Event 绘制 event count，State 和非数值原始值仅展示明细；页面必须显示 `resolution_seconds`、质量（含 `partial`）和类型化摘要 | 2026-10-25 按推荐实施 |
+| ADR-035 | Dashboard 插件指标引用 | 现有内建 Widget 的 `descriptor_id` 与 `device_id` 保持兼容；插件 Widget 使用独立结构化 `plugin_metric` 保存 plugin/version/collector/metric，禁止与内建引用混用。共享发布按设备精确验证已观测目录，且仅在插件目录与历史查询面同时启用时允许插件引用；个人与草稿仍可保存结构合法的引用，实际查询继续逐次鉴权 | 2026-10-25 按推荐实施 |
 
 ## 根据「全部按推荐」授权纳入基线、尚未逐项单独确认
 | ID | 领域 | 推荐基线 | 状态 |

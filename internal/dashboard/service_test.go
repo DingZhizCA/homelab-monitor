@@ -168,6 +168,9 @@ func TestDashboardDocumentRejectsExecutableOrInvalidLayoutData(t *testing.T) {
 	}
 	invalid := []Document{
 		{Widgets: []Widget{{ID: "script", Kind: WidgetKind("expression"), Title: "expression", DescriptorID: "host.cpu"}}},
+		{Widgets: []Widget{{ID: "mixed", Kind: WidgetTimeSeries, Title: "mixed", DescriptorID: "host.cpu", DeviceID: "node-a", PluginMetric: &PluginMetricReference{PluginID: "smart", PluginVersion: "1.0.0", CollectorID: "health", MetricID: "temperature"}}}},
+		{Widgets: []Widget{{ID: "plugin", Kind: WidgetTimeSeries, Title: "plugin", PluginMetric: &PluginMetricReference{PluginID: "smart", PluginVersion: "1.0.0", CollectorID: "health", MetricID: "temperature"}}}},
+		{Widgets: []Widget{{ID: "plugin", Kind: WidgetTimeSeries, Title: "plugin", DeviceID: "node-a", PluginMetric: &PluginMetricReference{PluginID: "smart:bad", PluginVersion: "1.0.0", CollectorID: "health", MetricID: "temperature"}}}},
 		{Widgets: []Widget{{ID: "cpu", Kind: WidgetMetricCard, Title: "CPU"}}, Layouts: []Layout{{Breakpoint: "desktop", Items: []Placement{{WidgetID: "missing", Width: 1, Height: 1}}}}},
 		{Widgets: []Widget{{ID: "cpu", Kind: WidgetMetricCard, Title: "CPU"}}, Layouts: []Layout{{Breakpoint: "desktop", Items: []Placement{{WidgetID: "cpu", Width: 0, Height: 1}}}}},
 		{Widgets: []Widget{{ID: "cpu", Kind: WidgetMetricCard, Title: "CPU"}, {ID: "cpu", Kind: WidgetStatus, Title: "duplicate"}}},

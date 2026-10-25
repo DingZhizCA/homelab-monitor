@@ -1,7 +1,7 @@
 /*
 Package dashboard defines the versioned, storage-independent Dashboard model.
 
-Widget documents contain only stable descriptor references and layout data;
+Widget documents contain only stable metric references and layout data;
 they cannot carry executable expressions or change Agent sampling schedules.
 */
 package dashboard
@@ -56,11 +56,20 @@ type Document struct {
 }
 
 type Widget struct {
-	ID           string     `json:"id"`
-	Kind         WidgetKind `json:"kind"`
-	Title        string     `json:"title"`
-	DescriptorID string     `json:"descriptor_id,omitempty"`
-	DeviceID     string     `json:"device_id,omitempty"`
+	ID           string                 `json:"id"`
+	Kind         WidgetKind             `json:"kind"`
+	Title        string                 `json:"title"`
+	DescriptorID string                 `json:"descriptor_id,omitempty"`
+	DeviceID     string                 `json:"device_id,omitempty"`
+	PluginMetric *PluginMetricReference `json:"plugin_metric,omitempty"`
+}
+
+// PluginMetricReference keeps plugin identity structured and versioned.
+type PluginMetricReference struct {
+	PluginID      string `json:"plugin_id"`
+	PluginVersion string `json:"plugin_version"`
+	CollectorID   string `json:"collector_id"`
+	MetricID      string `json:"metric_id"`
 }
 
 type Layout struct {
@@ -77,6 +86,8 @@ type Placement struct {
 }
 
 var documentIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+var pluginIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+var pluginVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$`)
 
 func (d Document) Validate() error {
 	widgets := make(map[string]struct{}, len(d.Widgets))
@@ -99,6 +110,14 @@ func (d Document) Validate() error {
 		}
 		if widget.DeviceID != "" && !documentIDPattern.MatchString(widget.DeviceID) {
 			return fmt.Errorf("widget %q has an invalid device ID", widget.ID)
+		}
+		if widget.PluginMetric != nil {
+			if widget.DescriptorID != "" {
+				return fmt.Errorf("widget %q mixes built-in and plugin metric references", widget.ID)
+			}
+			if widget.DeviceID == "" || !validPluginMetricReference(*widget.PluginMetric) {
+				return fmt.Errorf("widget %q has an invalid plugin metric reference", widget.ID)
+			}
 		}
 	}
 	layouts := make(map[string]struct{}, len(d.Layouts))
@@ -125,6 +144,13 @@ func (d Document) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validPluginMetricReference(reference PluginMetricReference) bool {
+	return pluginIdentifierPattern.MatchString(reference.PluginID) &&
+		pluginVersionPattern.MatchString(reference.PluginVersion) &&
+		pluginIdentifierPattern.MatchString(reference.CollectorID) &&
+		pluginIdentifierPattern.MatchString(reference.MetricID)
 }
 
 func validWidgetKind(kind WidgetKind) bool {

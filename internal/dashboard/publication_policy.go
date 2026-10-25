@@ -1,8 +1,8 @@
 /*
-Package dashboard validates that a shared Dashboard only publishes metric
-descriptors available through the authenticated Viewer query surface. Device
-scope remains unrestricted because ADR-020 grants both human roles the same
-built-in metric read set.
+Package dashboard validates that a shared Dashboard only publishes built-in or
+versioned plugin metrics available through the authenticated Viewer query
+surface. Device scope remains unrestricted while both human roles share the
+same metric read set.
 */
 package dashboard
 
@@ -14,15 +14,21 @@ import (
 
 // ViewerPublicationPolicy checks shared documents against the active registry.
 type ViewerPublicationPolicy struct {
-	registry *MetricRegistry
+	registry      *MetricRegistry
+	pluginMetrics PluginMetricPublicationSource
 }
 
-// NewViewerPublicationPolicy binds publication validation to one registry.
-func NewViewerPublicationPolicy(registry *MetricRegistry) (*ViewerPublicationPolicy, error) {
+// PluginMetricPublicationSource checks an exact observed plugin descriptor.
+type PluginMetricPublicationSource interface {
+	HasPluginMetricDescriptor(context.Context, string, PluginMetricReference) (bool, error)
+}
+
+// NewViewerPublicationPolicy binds publication validation to queryable metrics.
+func NewViewerPublicationPolicy(registry *MetricRegistry, pluginMetrics PluginMetricPublicationSource) (*ViewerPublicationPolicy, error) {
 	if registry == nil {
 		return nil, errors.New("metric registry is required")
 	}
-	return &ViewerPublicationPolicy{registry: registry}, nil
+	return &ViewerPublicationPolicy{registry: registry, pluginMetrics: pluginMetrics}, nil
 }
 
 // ValidateViewerAccess rejects descriptor references absent from Viewer APIs.
@@ -37,6 +43,19 @@ func (p *ViewerPublicationPolicy) ValidateViewerAccess(ctx context.Context, docu
 		return fmt.Errorf("validate Dashboard document: %w", err)
 	}
 	for _, widget := range document.Widgets {
+		if widget.PluginMetric != nil {
+			if p.pluginMetrics == nil {
+				return fmt.Errorf("%w: widget %q references unavailable plugin metrics", ErrForbidden, widget.ID)
+			}
+			exists, err := p.pluginMetrics.HasPluginMetricDescriptor(ctx, widget.DeviceID, *widget.PluginMetric)
+			if err != nil {
+				return fmt.Errorf("check plugin metric for widget %q: %w", widget.ID, err)
+			}
+			if !exists {
+				return fmt.Errorf("%w: widget %q references an unobserved plugin metric", ErrForbidden, widget.ID)
+			}
+			continue
+		}
 		if widget.DescriptorID == "" {
 			continue
 		}

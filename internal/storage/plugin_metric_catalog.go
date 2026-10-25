@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/DingZhizCA/homelab-monitor/internal/dashboard"
 	"github.com/DingZhizCA/homelab-monitor/internal/pluginmetrics"
 )
 
@@ -22,6 +23,24 @@ func NewPluginMetricDescriptorSource(database *sql.DB) (*PluginMetricDescriptorS
 		return nil, errors.New("metrics database is required")
 	}
 	return &PluginMetricDescriptorSource{database: database}, nil
+}
+
+// HasPluginMetricDescriptor checks one exact versioned identity for Dashboard publication.
+func (s *PluginMetricDescriptorSource) HasPluginMetricDescriptor(ctx context.Context, deviceID string, reference dashboard.PluginMetricReference) (bool, error) {
+	if deviceID == "" {
+		return false, errors.New("device is required")
+	}
+	var present int
+	err := s.database.QueryRowContext(ctx, `SELECT 1 FROM plugin_metric_descriptors
+		WHERE device_id = ? AND plugin_id = ? AND plugin_version = ? AND collector_id = ? AND metric_id = ?`,
+		deviceID, reference.PluginID, reference.PluginVersion, reference.CollectorID, reference.MetricID).Scan(&present)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("query exact plugin metric descriptor: %w", err)
+	}
+	return present == 1, nil
 }
 
 func (s *PluginMetricDescriptorSource) ListPluginMetricDescriptors(ctx context.Context, deviceID string, limit int) ([]pluginmetrics.Descriptor, error) {

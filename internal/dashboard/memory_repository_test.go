@@ -178,6 +178,26 @@ func TestMemoryRepositoryDoesNotLeakMutableDocumentSlices(t *testing.T) {
 	}
 }
 
+func TestMemoryRepositoryDoesNotLeakPluginMetricReferences(t *testing.T) {
+	ctx := context.Background()
+	repository := NewMemoryRepository()
+	reference := &PluginMetricReference{PluginID: "smart", PluginVersion: "1.0.0", CollectorID: "health", MetricID: "temperature"}
+	original := Document{Widgets: []Widget{{ID: "temperature", Kind: WidgetTimeSeries, Title: "Temperature", DeviceID: "node-a", PluginMetric: reference}}}
+	created, err := repository.CreatePersonal(ctx, "user-a", "Personal", original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference.PluginVersion = "caller-input-mutation"
+	created.Draft.Document.Widgets[0].PluginMetric.PluginVersion = "caller-result-mutation"
+	loaded, err := repository.GetVisible(ctx, "user-a", auth.RoleViewer, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Draft.Document.Widgets[0].PluginMetric.PluginVersion; got != "1.0.0" {
+		t.Fatalf("stored plugin version changed through alias: %q", got)
+	}
+}
+
 func testDashboardDocument(title string) Document {
 	return Document{Widgets: []Widget{{ID: "cpu", Kind: WidgetMetricCard, Title: title, DescriptorID: "cpu.usage_percent"}}}
 }

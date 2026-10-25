@@ -299,7 +299,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	dashboards, err := buildDashboardRuntime(databases, humanAuth, dashboardRuntimeConfig{maxBodyBytes: *dashboardMaxBodyBytes})
+	dashboards, err := buildDashboardRuntime(databases, humanAuth, dashboardRuntimeConfig{
+		maxBodyBytes:  *dashboardMaxBodyBytes,
+		pluginMetrics: pluginMetricCatalog != nil && pluginMetricHistory != nil,
+	})
 	if err != nil {
 		return err
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DingZhizCA/homelab-monitor/internal/dashboard"
 	"github.com/DingZhizCA/homelab-monitor/internal/metrics"
 )
 
@@ -79,6 +80,14 @@ func TestPluginMetricBatchWriterRejectsObservedDescriptorDrift(t *testing.T) {
 	items, err := source.ListPluginMetricDescriptors(context.Background(), "node-a", 2)
 	if err != nil || len(items) != 1 || items[0].Unit != "celsius" || len(items[0].LabelKeys) != 1 || items[0].LabelKeys[0] != "disk" {
 		t.Fatalf("items=%+v err=%v", items, err)
+	}
+	reference := dashboard.PluginMetricReference{PluginID: "smart", PluginVersion: "1.0.0", CollectorID: "temperature", MetricID: "temperature"}
+	if exists, err := source.HasPluginMetricDescriptor(context.Background(), "node-a", reference); err != nil || !exists {
+		t.Fatalf("exact descriptor exists=%t err=%v", exists, err)
+	}
+	reference.PluginVersion = "2.0.0"
+	if exists, err := source.HasPluginMetricDescriptor(context.Background(), "node-a", reference); err != nil || exists {
+		t.Fatalf("unobserved version exists=%t err=%v", exists, err)
 	}
 }
 

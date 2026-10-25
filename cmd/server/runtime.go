@@ -157,7 +157,8 @@ type authRuntime struct {
 }
 
 type dashboardRuntimeConfig struct {
-	maxBodyBytes int64
+	maxBodyBytes  int64
+	pluginMetrics bool
 }
 
 func (c dashboardRuntimeConfig) disabled() bool { return c.maxBodyBytes == 0 }
@@ -553,7 +554,14 @@ func buildDashboardRuntime(databases *storage.Databases, humanAuth *authRuntime,
 	if err != nil {
 		return nil, err
 	}
-	publication, err := dashboard.NewViewerPublicationPolicy(humanAuth.registry)
+	var pluginMetrics dashboard.PluginMetricPublicationSource
+	if config.pluginMetrics {
+		pluginMetrics, err = storage.NewPluginMetricDescriptorSource(databases.Metrics)
+		if err != nil {
+			return nil, err
+		}
+	}
+	publication, err := dashboard.NewViewerPublicationPolicy(humanAuth.registry, pluginMetrics)
 	if err != nil {
 		return nil, err
 	}

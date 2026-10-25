@@ -437,6 +437,12 @@ func newDashboardID() (string, error) {
 
 func cloneDocument(document Document) Document {
 	cloned := Document{Widgets: append([]Widget(nil), document.Widgets...), Layouts: make([]Layout, len(document.Layouts))}
+	for index := range cloned.Widgets {
+		if document.Widgets[index].PluginMetric != nil {
+			reference := *document.Widgets[index].PluginMetric
+			cloned.Widgets[index].PluginMetric = &reference
+		}
+	}
 	for index, layout := range document.Layouts {
 		cloned.Layouts[index] = Layout{Breakpoint: layout.Breakpoint, Items: append([]Placement(nil), layout.Items...)}
 	}

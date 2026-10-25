@@ -309,7 +309,7 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dashboardHandler, err := buildDashboardRuntime(databases, humanAuth, dashboardRuntimeConfig{maxBodyBytes: 1 << 20})
+	dashboardHandler, err := buildDashboardRuntime(databases, humanAuth, dashboardRuntimeConfig{maxBodyBytes: 1 << 20, pluginMetrics: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,6 +409,31 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"scope":"shared"`) {
 		t.Fatalf("Dashboard create status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := databases.Metrics.Exec(`INSERT INTO plugin_metric_descriptors
+		(device_id, plugin_id, plugin_version, collector_id, metric_id, metric_type, unit, label_keys_json, first_observed_at, last_observed_at)
+		VALUES ('node-a', 'smart', '1.0.0', 'health', 'temperature', 'gauge', 'celsius', '[]', '2026-10-25T00:00:00.000000000Z', '2026-10-25T00:00:00.000000000Z')`); err != nil {
+		t.Fatal(err)
+	}
+	request = authenticatedMutationRequest(http.MethodPost, "/api/v1/dashboards", `{"name":"Plugin","scope":"shared","document":{"widgets":[{"id":"temperature","kind":"time_series","title":"Temperature","device_id":"node-a","plugin_metric":{"plugin_id":"smart","plugin_version":"1.0.0","collector_id":"health","metric_id":"temperature"}}],"layouts":[]}}`)
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	var pluginDashboard struct {
+		ID string `json:"id"`
+	}
+	if response.Code != http.StatusCreated {
+		t.Fatalf("plugin Dashboard create status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &pluginDashboard); err != nil || pluginDashboard.ID == "" {
+		t.Fatalf("decode plugin Dashboard: id=%q err=%v", pluginDashboard.ID, err)
+	}
+	request = authenticatedMutationRequest(http.MethodPost, "/api/v1/dashboards/"+pluginDashboard.ID+"/publish", `{"expected_draft_revision":1}`)
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"plugin_version":"1.0.0"`) {
+		t.Fatalf("plugin Dashboard publish status=%d body=%s", response.Code, response.Body.String())
 	}
 	request = authenticatedMutationRequest(http.MethodPut, "/api/v1/owner/alert-rules", `{"expected_current":0,"rule":{"id":"high-cpu","device_id":"node-a","revision":1,"severity":"warning","enabled":true,"expression":{"metric":{"descriptor_id":"cpu.usage_percent","operator":"gt","threshold":80,"unit":"percent"}}}}`)
 	request.AddCookie(cookies[0])
