@@ -28,7 +28,7 @@ describe('AlertsOverview', () => {
       }] }),
     }))
     vi.stubGlobal('fetch', fetchMock)
-    render(<AlertsOverview devices={[device('node-a'), device('node-b')]}/>)
+    render(<AlertsOverview devices={[device('node-a'), device('node-b')]} role="viewer"/>)
 
     expect(await screen.findByText('high-cpu')).toBeInTheDocument()
     expect(screen.getByText('告警中')).toBeInTheDocument()
@@ -44,14 +44,14 @@ describe('AlertsOverview', () => {
 
   it('explains when evaluation current-state queries are unavailable', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404 })))
-    render(<AlertsOverview devices={[device('node-a')]}/>)
+    render(<AlertsOverview devices={[device('node-a')]} role="viewer"/>)
     expect(await screen.findByRole('alert')).toHaveTextContent('当前 Incident 查询未启用。')
   })
 
   it('does not query without a device', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    render(<AlertsOverview devices={[]}/>)
+    render(<AlertsOverview devices={[]} role="viewer"/>)
     expect(screen.getByText('还没有可查询的设备。')).toBeInTheDocument()
     expect(fetchMock).not.toHaveBeenCalled()
   })

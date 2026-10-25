@@ -47,6 +47,7 @@
 | ADR-035 | Dashboard 插件指标引用 | 现有内建 Widget 的 `descriptor_id` 与 `device_id` 保持兼容；插件 Widget 使用独立结构化 `plugin_metric` 保存 plugin/version/collector/metric，禁止与内建引用混用。共享发布按设备精确验证已观测目录，且仅在插件目录与历史查询面同时启用时允许插件引用；个人与草稿仍可保存结构合法的引用，实际查询继续逐次鉴权。插件 Widget 历史预览必须由用户显式填写起止时间和点数上限，不提供隐式范围 | 2026-10-25 按推荐实施 |
 | ADR-036 | 内建历史粒度元数据 | 内建历史点以向后兼容的新增字段显式返回 `resolution_seconds` 和 `aggregation_kind`；原始点为 `0/raw`，当前数值聚合点为正分辨率与 `gauge_mean`。History Service 校验两者组合，Web 按实际返回值展示混合分层结果 | 2026-10-25 按推荐实施 |
 | ADR-037 | 当前 Incident 查询边界 | 告警评估显式启用时挂载只读 `/api/v1/alerts/incidents`；Owner 与 Viewer 通过 HTTPS Session 按唯一 `device_id` 读取评估器同一 SQLite 仓储中的当前转换状态。Web 只在进入告警页、切换设备或用户手动刷新时查询。查询不推进状态、不触发采集，也不把当前状态伪装成 Incident 历史；规则写入仍保持 Owner 专属 | 2026-10-25 按推荐实施 |
+| ADR-038 | Web 告警规则编辑边界 | 首批 Owner 编辑器只创建和修订可无损回填的单指标规则；级别、启用状态、Descriptor、运算符、阈值和全部维度都由 Owner 明确填写，不设业务默认值。Revision 按当前版本递增并携带 CAS；已有 AND/OR 表达式只读展示，防止被简化编辑器静默覆盖 | 2026-10-25 按推荐实施 |
 
 ## 根据「全部按推荐」授权纳入基线、尚未逐项单独确认
 | ID | 领域 | 推荐基线 | 状态 |
