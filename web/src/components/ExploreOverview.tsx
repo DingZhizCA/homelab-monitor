@@ -6,6 +6,7 @@ import { lazy, Suspense, useMemo, useState } from 'react'
 import type { EChartsOption } from 'echarts'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { HistoricalMetricExplorer } from '@/components/HistoricalMetricExplorer'
+import { PluginHistoricalMetricExplorer } from '@/components/PluginHistoricalMetricExplorer'
 import { Skeleton } from '@/components/ui/skeleton'
 import { chartTooltip } from '@/lib/chart'
 import { comparisonSeries, exploreMetricOptions, type ExploreMetric } from '@/lib/explore'
@@ -47,5 +48,6 @@ export function ExploreOverview({ devices, history, dark }: { devices: DeviceSta
       <CardContent>{series.length === 0 ? <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">还没有可比较的样本。等待现有 Agent 上报即可。</p> : <Suspense fallback={<Skeleton className="h-56 sm:h-64"/>}><MetricChart option={option} label={`${selected.label}跨设备比较`}/></Suspense>}</CardContent>
     </Card>
     <HistoricalMetricExplorer devices={devices} dark={dark}/>
+    <PluginHistoricalMetricExplorer devices={devices} dark={dark}/>
   </section>
 }

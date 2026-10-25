@@ -110,6 +110,43 @@ export interface HistoricalMetricResult {
   points: HistoricalPoint[]
 }
 
+/** Metric schema reconstructed from validated observations for one exact plugin version. */
+export interface PluginMetricDescriptor {
+  device_id: string
+  plugin_id: string
+  plugin_version: string
+  collector_id: string
+  metric_id: string
+  type: 'gauge' | 'counter' | 'state' | 'event'
+  unit: string
+  label_keys: string[]
+  first_observed_at: string
+  last_observed_at: string
+}
+
+export interface PluginHistoricalPoint {
+  observed_at: string
+  type: PluginMetricDescriptor['type']
+  unit: string
+  value?: unknown
+  summary?: Record<string, unknown>
+  quality: HistoricalPoint['quality']
+  labels?: Record<string, string>
+  resolution_seconds: number
+  aggregation_kind: 'raw' | 'gauge_summary' | 'counter_delta' | 'state_summary' | 'event_count'
+}
+
+export interface PluginHistoricalMetricResult {
+  device_id: string
+  plugin_id: string
+  plugin_version: string
+  collector_id: string
+  metric_id: string
+  from: string
+  to: string
+  points: PluginHistoricalPoint[]
+}
+
 /** Lifecycle state for one explicitly authorized disk-capacity refresh. */
 export interface RefreshJob {
   request_id: string
