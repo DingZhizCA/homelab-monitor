@@ -99,6 +99,8 @@ export interface HistoricalPoint {
   value?: number
   dimensions?: Record<string, string>
   quality: 'valid' | 'partial' | 'estimated' | 'missing' | 'reset' | 'stale'
+  resolution_seconds: number
+  aggregation_kind: 'raw' | 'gauge_mean'
 }
 
 /** Bounded history response returned by the authenticated Server query API. */

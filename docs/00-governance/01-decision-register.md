@@ -45,6 +45,7 @@
 | ADR-033 | 已观测插件 Descriptor Catalog | 当前插件 Descriptor 只有 metric/type/unit/label keys，Server 可从 Agent 已按运行时 Descriptor 验证的规范化观测无损重建。目录以 device/plugin/version/collector/metric 为键，与观测同事务登记；同一键的类型、单位或 label keys 漂移使整批回滚。认证目录只展示实际出现过数据的 Schema，并受显式每设备条数上限约束；首次成功观测前不可见，将来增加名称、说明等非观测字段时再引入独立发布协议 | 2026-10-23 按推荐实施 |
 | ADR-034 | Web 插件历史浏览 | Explore 以已观测 Descriptor Catalog 构造 device/plugin/version/collector/metric 精确选择器，不跨版本合并，也不触发 Collector。结果按 `aggregation_kind` 映射类型化摘要：Gauge 绘制 mean、Counter 绘制 delta、Event 绘制 event count，State 和非数值原始值仅展示明细；页面必须显示 `resolution_seconds`、质量（含 `partial`）和类型化摘要 | 2026-10-25 按推荐实施 |
 | ADR-035 | Dashboard 插件指标引用 | 现有内建 Widget 的 `descriptor_id` 与 `device_id` 保持兼容；插件 Widget 使用独立结构化 `plugin_metric` 保存 plugin/version/collector/metric，禁止与内建引用混用。共享发布按设备精确验证已观测目录，且仅在插件目录与历史查询面同时启用时允许插件引用；个人与草稿仍可保存结构合法的引用，实际查询继续逐次鉴权。插件 Widget 历史预览必须由用户显式填写起止时间和点数上限，不提供隐式范围 | 2026-10-25 按推荐实施 |
+| ADR-036 | 内建历史粒度元数据 | 内建历史点以向后兼容的新增字段显式返回 `resolution_seconds` 和 `aggregation_kind`；原始点为 `0/raw`，当前数值聚合点为正分辨率与 `gauge_mean`。History Service 校验两者组合，Web 按实际返回值展示混合分层结果 | 2026-10-25 按推荐实施 |
 
 ## 根据「全部按推荐」授权纳入基线、尚未逐项单独确认
 | ID | 领域 | 推荐基线 | 状态 |

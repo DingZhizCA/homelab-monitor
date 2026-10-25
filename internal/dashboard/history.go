@@ -22,12 +22,14 @@ import (
 
 // HistoricalPoint is one persisted observation returned by a history source.
 type HistoricalPoint struct {
-	DeviceID     string            `json:"device_id"`
-	DescriptorID string            `json:"descriptor_id"`
-	SampledAt    time.Time         `json:"sampled_at"`
-	Value        *float64          `json:"value,omitempty"`
-	Dimensions   map[string]string `json:"dimensions,omitempty"`
-	Quality      string            `json:"quality"`
+	DeviceID          string            `json:"device_id"`
+	DescriptorID      string            `json:"descriptor_id"`
+	SampledAt         time.Time         `json:"sampled_at"`
+	Value             *float64          `json:"value,omitempty"`
+	Dimensions        map[string]string `json:"dimensions,omitempty"`
+	Quality           string            `json:"quality"`
+	ResolutionSeconds int               `json:"resolution_seconds"`
+	AggregationKind   string            `json:"aggregation_kind"`
 }
 
 // HistoryRequest selects observations in the half-open interval [From, To).
@@ -107,10 +109,14 @@ func (s *HistoryService) Query(ctx context.Context, actor auth.Principal, reques
 	points = append([]HistoricalPoint(nil), points...)
 	for index := range points {
 		point := &points[index]
+		// Empty kind is accepted from older injected sources and normalized to raw.
+		if point.AggregationKind == "" && point.ResolutionSeconds == 0 {
+			point.AggregationKind = "raw"
+		}
 		if point.DeviceID != request.DeviceID || point.DescriptorID != request.DescriptorID || point.SampledAt.Before(request.From) || !point.SampledAt.Before(request.To) || point.SampledAt.IsZero() {
 			return HistoryResult{}, ErrInvalidHistoryPoint
 		}
-		if !validHistoricalQuality(point.Quality) || len(point.Dimensions) != len(descriptor.Dimensions) {
+		if !validHistoricalQuality(point.Quality) || !validHistoricalAggregation(point.ResolutionSeconds, point.AggregationKind) || len(point.Dimensions) != len(descriptor.Dimensions) {
 			return HistoryResult{}, ErrInvalidHistoryPoint
 		}
 		if point.Value != nil && (math.IsNaN(*point.Value) || math.IsInf(*point.Value, 0)) {
@@ -140,6 +146,10 @@ func (s *HistoryService) Query(ctx context.Context, actor auth.Principal, reques
 		return points[i].SampledAt.Before(points[j].SampledAt)
 	})
 	return HistoryResult{Descriptor: descriptor, DeviceID: request.DeviceID, From: request.From, To: request.To, Points: points}, nil
+}
+
+func validHistoricalAggregation(resolution int, kind string) bool {
+	return resolution == 0 && kind == "raw" || resolution > 0 && kind == "gauge_mean"
 }
 
 func validHistoricalQuality(quality string) bool {

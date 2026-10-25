@@ -39,7 +39,7 @@ func TestMetricHistorySourceReturnsBoundedOrderedDescriptorPoints(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(points) != 2 || points[0].Value == nil || *points[0].Value != 10 || points[1].Value == nil || *points[1].Value != 20 || points[0].Quality != "valid" {
+	if len(points) != 2 || points[0].Value == nil || *points[0].Value != 10 || points[1].Value == nil || *points[1].Value != 20 || points[0].Quality != "valid" || points[0].ResolutionSeconds != 0 || points[0].AggregationKind != "raw" {
 		t.Fatalf("points=%+v", points)
 	}
 }

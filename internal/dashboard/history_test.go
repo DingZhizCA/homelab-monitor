@@ -117,6 +117,8 @@ func TestHistoryQueryRejectsInvalidRangesLimitsAndSourceResults(t *testing.T) {
 		{"unexpected dimension", HistoricalPoint{DeviceID: "node-a", DescriptorID: "cpu.usage_percent", SampledAt: start, Quality: "valid", Dimensions: map[string]string{"interface": "eth0"}}},
 		{"non-finite value", HistoricalPoint{DeviceID: "node-a", DescriptorID: "cpu.usage_percent", SampledAt: start, Value: floatPointer(math.NaN()), Quality: "valid"}},
 		{"invalid UTF-8 dimension", HistoricalPoint{DeviceID: "node-a", DescriptorID: "network.rx_bytes_per_second", SampledAt: start, Quality: "valid", Dimensions: map[string]string{"interface": string([]byte{0xff})}}},
+		{"raw with resolution", HistoricalPoint{DeviceID: "node-a", DescriptorID: "cpu.usage_percent", SampledAt: start, Quality: "valid", ResolutionSeconds: 60, AggregationKind: "raw"}},
+		{"aggregate without resolution", HistoricalPoint{DeviceID: "node-a", DescriptorID: "cpu.usage_percent", SampledAt: start, Quality: "estimated", AggregationKind: "gauge_mean"}},
 	}
 	for _, test := range invalidPoints {
 		t.Run(test.name, func(t *testing.T) {

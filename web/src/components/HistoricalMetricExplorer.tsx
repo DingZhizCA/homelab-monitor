@@ -118,6 +118,7 @@ export function HistoricalMetricExplorer({ devices, dark }: { devices: DeviceSta
     return counts
   }, {})
   const latestSample = result?.points.reduce<string | null>((latest, point) => !latest || point.sampled_at > latest ? point.sampled_at : latest, null)
+  const resolutions = result ? [...new Set(result.points.map(point => point.resolution_seconds === 0 ? '原始' : `${point.resolution_seconds} 秒`))] : []
   const displayTime = (value: string) => new Intl.DateTimeFormat(undefined, {
     year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
   }).format(new Date(value))
@@ -139,7 +140,7 @@ export function HistoricalMetricExplorer({ devices, dark }: { devices: DeviceSta
         {error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
         {result && <div className="mt-5">
           {result.points.length === 0 ? <p role="status" className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">所选范围内没有历史点。</p> : <>
-            <p className="mb-3 text-xs text-muted-foreground">来源：Server 历史源 · 时区：{Intl.DateTimeFormat().resolvedOptions().timeZone} · {result.device_id} · {displayTime(result.from)} – {displayTime(result.to)} · 最近样本：{latestSample ? displayTime(latestSample) : '暂无'} · {result.points.length} 点 · 聚合粒度由历史源决定（接口未返回粒度元数据） · {Object.entries(qualitySummary || {}).map(([quality, count]) => `${qualityLabels[quality as keyof typeof qualityLabels] || quality} ${count}`).join('，')}；缺失值显示为图表断点。</p>
+            <p className="mb-3 text-xs text-muted-foreground">来源：Server 历史源 · 时区：{Intl.DateTimeFormat().resolvedOptions().timeZone} · {result.device_id} · {displayTime(result.from)} – {displayTime(result.to)} · 最近样本：{latestSample ? displayTime(latestSample) : '暂无'} · {result.points.length} 点 · 分辨率：{resolutions.join('、')} · {Object.entries(qualitySummary || {}).map(([quality, count]) => `${qualityLabels[quality as keyof typeof qualityLabels] || quality} ${count}`).join('，')}；缺失值显示为图表断点。</p>
             {option && <Suspense fallback={<Skeleton className="h-56 sm:h-64"/>}><MetricChart option={option} label={`${result.descriptor.name}历史趋势`}/></Suspense>}
           </>}
         </div>}

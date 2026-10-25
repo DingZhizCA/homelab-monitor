@@ -106,12 +106,13 @@ func (s *MetricHistorySource) queryRaw(ctx context.Context, request dashboard.Hi
 				quality = "missing"
 			}
 			result = append(result, dashboard.HistoricalPoint{
-				DeviceID:     request.DeviceID,
-				DescriptorID: request.DescriptorID,
-				SampledAt:    envelope.Timestamp.UTC(),
-				Value:        point.Value,
-				Dimensions:   point.Dimensions,
-				Quality:      quality,
+				DeviceID:        request.DeviceID,
+				DescriptorID:    request.DescriptorID,
+				SampledAt:       envelope.Timestamp.UTC(),
+				Value:           point.Value,
+				Dimensions:      point.Dimensions,
+				Quality:         quality,
+				AggregationKind: "raw",
 			})
 			if len(result) == request.Limit {
 				return result, nil
@@ -184,7 +185,7 @@ func (s *MetricHistorySource) queryAggregates(ctx context.Context, request dashb
 		if err := json.Unmarshal([]byte(dimensionsJSON), &dimensions); err != nil {
 			return nil, fmt.Errorf("decode metric aggregate dimensions: %w", err)
 		}
-		point := dashboard.HistoricalPoint{DeviceID: request.DeviceID, DescriptorID: request.DescriptorID, SampledAt: parsed, Dimensions: dimensions, Quality: "missing"}
+		point := dashboard.HistoricalPoint{DeviceID: request.DeviceID, DescriptorID: request.DescriptorID, SampledAt: parsed, Dimensions: dimensions, Quality: "missing", ResolutionSeconds: resolution, AggregationKind: "gauge_mean"}
 		if valueCount > 0 {
 			value := valueSum / float64(valueCount)
 			point.Value, point.Quality = &value, "estimated"

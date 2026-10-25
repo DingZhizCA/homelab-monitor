@@ -27,8 +27,8 @@ const history = {
   from: '2026-10-18T10:00:00Z',
   to: '2026-10-18T11:00:00Z',
   points: [
-    { device_id: 'node-a', descriptor_id: descriptor.id, sampled_at: '2026-10-18T10:10:00Z', value: 25, quality: 'valid' },
-    { device_id: 'node-a', descriptor_id: descriptor.id, sampled_at: '2026-10-18T10:20:00Z', quality: 'missing' },
+    { device_id: 'node-a', descriptor_id: descriptor.id, sampled_at: '2026-10-18T10:10:00Z', value: 25, quality: 'valid', resolution_seconds: 60, aggregation_kind: 'gauge_mean' },
+    { device_id: 'node-a', descriptor_id: descriptor.id, sampled_at: '2026-10-18T10:20:00Z', quality: 'missing', resolution_seconds: 60, aggregation_kind: 'gauge_mean' },
   ],
 }
 
@@ -67,6 +67,7 @@ describe('HistoricalMetricExplorer', () => {
     expect(query.get('descriptor_id')).toBe(descriptor.id)
     expect(query.get('device_id')).toBe('node-a')
     expect(query.get('limit')).toBe('120')
+    expect(screen.getByText(/分辨率：60 秒/)).toBeInTheDocument()
     expect(screen.getByText(/有效 1，缺失 1/)).toBeInTheDocument()
     const series = JSON.parse(screen.getByRole('img', { name: 'CPU usage历史趋势' }).getAttribute('data-series') || '[]')
     expect(series[0].connectNulls).toBe(false)

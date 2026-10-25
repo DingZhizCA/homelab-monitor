@@ -105,11 +105,11 @@ func TestTieredMetricHistorySelectsOneSourcePerAgeWindow(t *testing.T) {
 		t.Fatalf("points=%+v", points)
 	}
 	for index, point := range points {
-		if index < 3 && point.Quality != "estimated" {
-			t.Fatalf("aggregate point %d quality=%q", index, point.Quality)
+		if index < 3 && (point.Quality != "estimated" || point.ResolutionSeconds <= 0 || point.AggregationKind != "gauge_mean") {
+			t.Fatalf("aggregate point %d=%+v", index, point)
 		}
-		if index == 3 && point.Quality != "valid" {
-			t.Fatalf("raw point quality=%q", point.Quality)
+		if index == 3 && (point.Quality != "valid" || point.ResolutionSeconds != 0 || point.AggregationKind != "raw") {
+			t.Fatalf("raw point=%+v", point)
 		}
 	}
 }
