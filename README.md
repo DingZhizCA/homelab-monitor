@@ -227,5 +227,5 @@ web/                  React Dashboard
 - 告警规则的不可变历史、回滚和审计可持久化装配；有界评估调度可从 Server 当前快照推进带容量和时间戳 CAS 的 SQLite Incident 状态。规则删除和跨 Revision Incident 迁移、通知去重、静默和投递仍未实现。
 - 插件 Desired/Reported State、审计和制品路由可由 `cmd/server` 显式装配；Agent 可在有界私有状态中跨重启恢复回滚关联和同 Revision 隔离。Server 制品仓库有显式总字节、包数量和扫描边界，并按 Desired 引用与宽限期执行有界清理；参数仍需在目标设备调优。
 - Agent 的有界批量队列与插件控制均默认关闭，启用插件仍需本机信任根、权限 grant、私有状态目录，以及 staging 单包/总字节/包数/扫描/清理和全部运行参数有效。
-- 内建与插件指标已有 SQLite 原始持久化、事务型分钟/小时/日聚合队列、分层查询与保留、显式 PASSIVE checkpoint、软硬容量保护，以及独立的 WAL 截断和 incremental vacuum 物理回收。插件聚合保留类型语义、版本和标签，并显式返回粒度；Web Explore 已用已观测 Descriptor 目录构造精确历史选择器并展示类型化结果。Dashboard 后端可保存并校验结构化插件引用，Web 编辑和预览尚未接入；维护及聚合参数尚未在目标设备调优；流量归属账本、包声明元数据发布和完整 Incident/通知流程仍未实现。
+- 内建与插件指标已有 SQLite 原始持久化、事务型分钟/小时/日聚合队列、分层查询与保留、显式 PASSIVE checkpoint、软硬容量保护，以及独立的 WAL 截断和 incremental vacuum 物理回收。插件聚合保留类型语义、版本和标签，并显式返回粒度；Web Explore 已用已观测 Descriptor 目录构造精确历史选择器并展示类型化结果。Dashboard 编辑器可保存结构化插件引用，Server 共享发布会精确校验；插件 Widget 的内嵌历史预览尚未提供显式范围控件。维护及聚合参数尚未在目标设备调优；流量归属账本、包声明元数据发布和完整 Incident/通知流程仍未实现。
 - 插件进程当前为同 UID 子进程；专用 launcher 已设置 FD、进程数、单文件、虚拟地址空间和累计 CPU 时间硬限制及 `no_new_privs`，但仍缺少 cgroup 进程树总量、RSS、不同 UID、文件系统、系统调用和网络隔离，不能视为生产安全沙箱。

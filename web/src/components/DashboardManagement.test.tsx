@@ -18,6 +18,7 @@ describe('DashboardManagement', () => {
       calls.push({ path, init })
       if (path === '/api/v1/dashboards' && !init.method) return response({ dashboards: [] })
       if (path === '/api/v1/dashboard/metrics/descriptors') return response({ descriptors: [descriptor] })
+      if (path.startsWith('/api/v1/dashboard/plugin-metrics/descriptors?')) return response({ descriptors: [] })
       if (path === '/api/v1/dashboards' && init.method === 'POST') {
         const body = JSON.parse(String(init.body))
         return response({ id: 'dash-1', name: body.name, scope: body.scope, draft: { number: 1, document: body.document } }, 201)
@@ -52,6 +53,49 @@ describe('DashboardManagement', () => {
     fireEvent.click(screen.getByRole('button', { name: '读取当前值' }))
     expect(await screen.findByText('23.5 percent · fresh')).toBeInTheDocument()
     expect(calls.some(call => call.path.includes('descriptor_id=cpu.usage_percent') && call.path.includes('device_id=node-a'))).toBe(true)
+  })
+
+  it('saves an exact versioned plugin metric reference without inventing a preview range', async () => {
+    const calls: Array<{ path: string; init: RequestInit }> = []
+    const devices = [{ snapshot: { device: { id: 'node-a', display_name: 'Node A' } } }]
+    const pluginDescriptor = { device_id: 'node-a', plugin_id: 'smart', plugin_version: '1.0.0', collector_id: 'health', metric_id: 'temperature', type: 'gauge', unit: 'celsius', label_keys: ['disk'], first_observed_at: '2026-10-25T00:00:00Z', last_observed_at: '2026-10-25T01:00:00Z' }
+    vi.stubGlobal('crypto', { randomUUID: () => 'plugin-widget-1' })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const path = String(input)
+      calls.push({ path, init })
+      if (path === '/api/v1/dashboards' && !init.method) return response({ dashboards: [] })
+      if (path === '/api/v1/dashboard/metrics/descriptors') return response({ descriptors: [] })
+      if (path.startsWith('/api/v1/dashboard/plugin-metrics/descriptors?')) return response({ descriptors: [pluginDescriptor] })
+      if (path === '/api/v1/dashboards' && init.method === 'POST') {
+        const body = JSON.parse(String(init.body))
+        return response({ id: 'dash-plugin', name: body.name, scope: body.scope, draft: { number: 1, document: body.document } }, 201)
+      }
+      if (path === '/api/v1/dashboards/dash-plugin/personal' && init.method === 'PUT') {
+        const body = JSON.parse(String(init.body))
+        return response({ id: 'dash-plugin', name: 'Plugins', scope: 'personal', draft: { number: 2, document: body.document } })
+      }
+      throw new Error(`unexpected request ${path}`)
+    }))
+
+    render(<DashboardManagement role="viewer" devices={devices}/>)
+    await screen.findByText('暂无仪表盘')
+    fireEvent.change(screen.getByLabelText('仪表盘名称'), { target: { value: 'Plugins' } })
+    fireEvent.click(screen.getByRole('button', { name: '新建个人仪表盘' }))
+    fireEvent.change(await screen.findByLabelText('指标来源'), { target: { value: 'plugin' } })
+    await waitFor(() => expect((screen.getByLabelText('插件指标') as HTMLSelectElement).value).toContain('smart'))
+    fireEvent.click(screen.getByRole('button', { name: '添加时间序列' }))
+    expect(screen.getByText('历史请在 Explore 查询')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '读取当前值' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '保存布局' }))
+
+    await waitFor(() => expect(calls.some(call => call.path.endsWith('/personal') && call.init.method === 'PUT')).toBe(true))
+    const saved = JSON.parse(String(calls.find(call => call.path.endsWith('/personal'))!.init.body))
+    expect(saved.document.widgets).toEqual([expect.objectContaining({
+      id: 'plugin-widget-1', device_id: 'node-a',
+      plugin_metric: { plugin_id: 'smart', plugin_version: '1.0.0', collector_id: 'health', metric_id: 'temperature' },
+    })])
+    expect(saved.document.widgets[0]).not.toHaveProperty('descriptor_id')
+    expect(calls.some(call => call.path.includes('/plugin-metrics/history'))).toBe(false)
   })
 
   it('does not expose shared draft creation to Viewers', async () => {
