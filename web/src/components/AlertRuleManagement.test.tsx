@@ -66,4 +66,25 @@ describe('AlertRuleManagement', () => {
     expect(savedBody?.rule.revision).toBe(4)
     expect(savedBody?.rule.expression.metric.threshold).toBe(85)
   })
+
+  it('loads immutable history and republishes an explicit target as a new revision', async () => {
+    let rollbackBody: unknown
+    const current = { id: 'combined', device_id: 'node-a', revision: 3, severity: 'critical', enabled: true, expression: { all: [{ metric: { descriptor_id: 'cpu.usage_percent', operator: 'gt', threshold: 90, unit: 'percent' } }] } }
+    const old = { ...current, revision: 1, severity: 'warning', expression: { all: [{ metric: { descriptor_id: 'cpu.usage_percent', operator: 'gt', threshold: 80, unit: 'percent' } }] } }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const path = String(input)
+      if (path.startsWith('/api/v1/owner/alert-rules?')) return { ok: true, status: 200, json: async () => ({ rules: [current] }) }
+      if (path === '/api/v1/dashboard/metrics/descriptors') return { ok: true, status: 200, json: async () => ({ descriptors: [] }) }
+      if (path.startsWith('/api/v1/owner/alert-rules/revisions?')) return { ok: true, status: 200, json: async () => ({ revisions: [current, old] }) }
+      if (path === '/api/v1/owner/alert-rules/revisions' && init.method === 'POST') { rollbackBody = JSON.parse(String(init.body)); return { ok: true, status: 204 } }
+      throw new Error(`unexpected request ${path}`)
+    }))
+    render(<AlertRuleManagement deviceID="node-a"/>)
+    expect(await screen.findByText('复杂表达式只读')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '历史' }))
+    const rollback = await screen.findByRole('button', { name: '以 Revision 1 创建 Revision 4' })
+    fireEvent.click(rollback)
+    expect(await screen.findByText('规则 combined 已将 Revision 1 重新发布为 Revision 4。')).toBeInTheDocument()
+    expect(rollbackBody).toEqual({ device_id: 'node-a', rule_id: 'combined', target_revision: 1, new_revision: 4, expected_current: 3 })
+  })
 })
