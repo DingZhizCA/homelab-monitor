@@ -3,7 +3,9 @@
  * 只写入 Dashboard API 文档，不提供代码表达式或设备采集控制。
  */
 import { useEffect, useRef, useState } from 'react'
-import type { PluginMetricDescriptor } from '@/types'
+import { PluginWidgetHistoryPreview } from '@/components/PluginWidgetHistoryPreview'
+import { descriptorReference, pluginMetricKey, pluginMetricLabel } from '@/lib/pluginMetrics'
+import type { PluginMetricDescriptor, PluginMetricReference } from '@/types'
 
 type Scope = 'personal' | 'shared' | 'template'
 type WidgetKind = 'metric_card' | 'time_series' | 'status' | 'device_list' | 'traffic_ranking' | 'categorized_traffic' | 'wifi_clients' | 'tailnet_clients' | 'alert_list' | 'topology'
@@ -14,7 +16,7 @@ interface Widget {
   title: string
   descriptor_id?: string
   device_id?: string
-  plugin_metric?: Pick<PluginMetricDescriptor, 'plugin_id' | 'plugin_version' | 'collector_id' | 'metric_id'>
+  plugin_metric?: PluginMetricReference
 }
 
 interface Placement { widget_id: string; x: number; y: number; width: number; height: number }
@@ -32,7 +34,7 @@ interface PreviewState { loading: boolean; result?: MetricPreview; error?: strin
 
 const emptyDocument = (): DocumentModel => ({ widgets: [], layouts: [] })
 
-export function DashboardManagement({ role, devices = [] }: { role: 'owner' | 'viewer'; devices?: { snapshot: { device: { id: string; display_name: string } } }[] }) {
+export function DashboardManagement({ role, devices = [], dark = false }: { role: 'owner' | 'viewer'; devices?: { snapshot: { device: { id: string; display_name: string } } }[]; dark?: boolean }) {
   const [items, setItems] = useState<DashboardModel[]>([])
   const [selected, setSelected] = useState<DashboardModel | null>(null)
   const [document, setDocument] = useState<DocumentModel>(emptyDocument)
@@ -88,7 +90,7 @@ export function DashboardManagement({ role, devices = [] }: { role: 'owner' | 'v
       .then(result => {
         setPluginDescriptors(result.descriptors)
         setPluginCatalogDeviceID(currentDeviceID)
-        setPluginDescriptorID(result.descriptors[0] ? pluginDescriptorKey(result.descriptors[0]) : '')
+        setPluginDescriptorID(result.descriptors[0] ? pluginMetricKey(result.descriptors[0]) : '')
         setPluginCatalogMessage(result.descriptors.length ? '' : '该设备尚无已观测插件指标。')
       })
       .catch(reason => {
@@ -145,12 +147,12 @@ export function DashboardManagement({ role, devices = [] }: { role: 'owner' | 'v
   function addWidget() {
     if (!currentDeviceID) return
     const descriptor = descriptors.find(item => item.id === descriptorID)
-    const pluginDescriptor = availablePluginDescriptors.find(item => pluginDescriptorKey(item) === pluginDescriptorID)
+    const pluginDescriptor = availablePluginDescriptors.find(item => pluginMetricKey(item) === pluginDescriptorID)
     if ((metricSource === 'builtin' && !descriptor) || (metricSource === 'plugin' && !pluginDescriptor)) return
     const widgetID = crypto.randomUUID()
     const widget: Widget = metricSource === 'builtin' && descriptor
       ? { id: widgetID, kind: 'time_series', title: descriptor.name, descriptor_id: descriptor.id, device_id: currentDeviceID }
-      : { id: widgetID, kind: 'time_series', title: `${pluginDescriptor!.plugin_id}@${pluginDescriptor!.plugin_version} · ${pluginDescriptor!.collector_id}/${pluginDescriptor!.metric_id}`, device_id: currentDeviceID, plugin_metric: { plugin_id: pluginDescriptor!.plugin_id, plugin_version: pluginDescriptor!.plugin_version, collector_id: pluginDescriptor!.collector_id, metric_id: pluginDescriptor!.metric_id } }
+      : { id: widgetID, kind: 'time_series', title: pluginMetricLabel(pluginDescriptor!), device_id: currentDeviceID, plugin_metric: descriptorReference(pluginDescriptor!) }
     const desktop = document.layouts.find(layout => layout.breakpoint === 'desktop') || { breakpoint: 'desktop' as const, items: [] }
     const mobile = document.layouts.find(layout => layout.breakpoint === 'mobile') || { breakpoint: 'mobile' as const, items: [] }
     setDocument({
@@ -334,15 +336,16 @@ export function DashboardManagement({ role, devices = [] }: { role: 'owner' | 'v
               <p className="mt-2 text-muted-foreground">布局：{previewedHistory.document.layouts.map(layout => `${layout.breakpoint} ${layout.items.length} 项`).join('，') || '无'}</p>
             </section>}
           </section>}
-          {canEdit && <div className="flex flex-wrap items-end gap-2"><label className="text-sm">设备<select aria-label="设备" value={currentDeviceID} onChange={event => { const value = event.target.value; setDeviceID(value); setPluginDescriptors([]); setPluginCatalogDeviceID(''); setPluginDescriptorID(''); setPluginCatalogMessage(value ? '正在读取已观测插件指标…' : '选择设备后读取插件指标。') }} className="mt-1 block rounded-md border bg-background px-3 py-2">{devices.map(device => <option key={device.snapshot.device.id} value={device.snapshot.device.id}>{device.snapshot.device.display_name || device.snapshot.device.id}</option>)}</select></label><label className="text-sm">来源<select aria-label="指标来源" value={metricSource} onChange={event => setMetricSource(event.target.value as 'builtin' | 'plugin')} className="mt-1 block rounded-md border bg-background px-3 py-2"><option value="builtin">内建指标</option><option value="plugin">插件指标</option></select></label>{metricSource === 'builtin' ? <label className="text-sm">指标<select aria-label="指标" value={descriptorID} onChange={event => setDescriptorID(event.target.value)} className="mt-1 block rounded-md border bg-background px-3 py-2">{descriptors.map(descriptor => <option key={descriptor.id} value={descriptor.id}>{descriptor.name} · {descriptor.unit}</option>)}</select></label> : <label className="text-sm">插件指标<select aria-label="插件指标" value={pluginDescriptorID} onChange={event => setPluginDescriptorID(event.target.value)} disabled={!availablePluginDescriptors.length} className="mt-1 block rounded-md border bg-background px-3 py-2">{availablePluginDescriptors.map(descriptor => <option key={pluginDescriptorKey(descriptor)} value={pluginDescriptorKey(descriptor)}>{descriptor.plugin_id}@{descriptor.plugin_version} · {descriptor.collector_id}/{descriptor.metric_id} · {descriptor.unit}</option>)}</select></label>}<button type="button" disabled={!canAddWidget} onClick={addWidget} className="rounded-md border px-3 py-2 text-sm">添加时间序列</button>{metricSource === 'plugin' && pluginCatalogMessage && <p role="status" className="w-full text-xs text-muted-foreground">{pluginCatalogMessage}</p>}</div>}
+          {canEdit && <div className="flex flex-wrap items-end gap-2"><label className="text-sm">设备<select aria-label="设备" value={currentDeviceID} onChange={event => { const value = event.target.value; setDeviceID(value); setPluginDescriptors([]); setPluginCatalogDeviceID(''); setPluginDescriptorID(''); setPluginCatalogMessage(value ? '正在读取已观测插件指标…' : '选择设备后读取插件指标。') }} className="mt-1 block rounded-md border bg-background px-3 py-2">{devices.map(device => <option key={device.snapshot.device.id} value={device.snapshot.device.id}>{device.snapshot.device.display_name || device.snapshot.device.id}</option>)}</select></label><label className="text-sm">来源<select aria-label="指标来源" value={metricSource} onChange={event => setMetricSource(event.target.value as 'builtin' | 'plugin')} className="mt-1 block rounded-md border bg-background px-3 py-2"><option value="builtin">内建指标</option><option value="plugin">插件指标</option></select></label>{metricSource === 'builtin' ? <label className="text-sm">指标<select aria-label="指标" value={descriptorID} onChange={event => setDescriptorID(event.target.value)} className="mt-1 block rounded-md border bg-background px-3 py-2">{descriptors.map(descriptor => <option key={descriptor.id} value={descriptor.id}>{descriptor.name} · {descriptor.unit}</option>)}</select></label> : <label className="text-sm">插件指标<select aria-label="插件指标" value={pluginDescriptorID} onChange={event => setPluginDescriptorID(event.target.value)} disabled={!availablePluginDescriptors.length} className="mt-1 block rounded-md border bg-background px-3 py-2">{availablePluginDescriptors.map(descriptor => <option key={pluginMetricKey(descriptor)} value={pluginMetricKey(descriptor)}>{descriptor.plugin_id}@{descriptor.plugin_version} · {descriptor.collector_id}/{descriptor.metric_id} · {descriptor.unit}</option>)}</select></label>}<button type="button" disabled={!canAddWidget} onClick={addWidget} className="rounded-md border px-3 py-2 text-sm">添加时间序列</button>{metricSource === 'plugin' && pluginCatalogMessage && <p role="status" className="w-full text-xs text-muted-foreground">{pluginCatalogMessage}</p>}</div>}
           {document.widgets.length === 0 ? <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">当前布局为空。</p> : <ul className="space-y-2">{document.widgets.map(widget => {
             const preview = previews[widget.id]
-            return <li key={widget.id} className="rounded-lg border p-3"><div className="flex items-center justify-between gap-3"><span className="min-w-0 truncate text-sm">{widget.title}<span className="ml-2 text-xs text-muted-foreground">{widget.descriptor_id || (widget.plugin_metric && pluginMetricLabel(widget.plugin_metric))}</span></span><div className="flex shrink-0 gap-2">{widget.plugin_metric ? <span className="self-center text-xs text-muted-foreground">历史请在 Explore 查询</span> : <button type="button" disabled={!widget.descriptor_id || !widget.device_id || preview?.loading} onClick={() => void previewWidget(widget)} className="rounded-md border px-2 py-1 text-xs disabled:opacity-50">{preview?.loading ? '读取中…' : '读取当前值'}</button>}{canEdit && <button type="button" onClick={() => removeWidget(widget.id)} className="rounded-md border px-2 py-1 text-xs">移除</button>}</div></div>
+            return <li key={widget.id} className="rounded-lg border p-3"><div className="flex items-center justify-between gap-3"><span className="min-w-0 truncate text-sm">{widget.title}<span className="ml-2 text-xs text-muted-foreground">{widget.descriptor_id || (widget.plugin_metric && pluginMetricLabel(widget.plugin_metric))}</span></span><div className="flex shrink-0 gap-2">{!widget.plugin_metric && <button type="button" disabled={!widget.descriptor_id || !widget.device_id || preview?.loading} onClick={() => void previewWidget(widget)} className="rounded-md border px-2 py-1 text-xs disabled:opacity-50">{preview?.loading ? '读取中…' : '读取当前值'}</button>}{canEdit && <button type="button" onClick={() => removeWidget(widget.id)} className="rounded-md border px-2 py-1 text-xs">移除</button>}</div></div>
               {preview?.error && <p role="alert" className="mt-2 text-xs text-destructive">{preview.error}</p>}
               {preview?.result && <div className="mt-2 space-y-1 text-xs" aria-live="polite">{preview.result.points.map((point, index) => <p key={index} className="text-muted-foreground">{Object.entries(point.dimensions || {}).map(([key, value]) => `${key}: ${value}`).join(' · ')}{Object.keys(point.dimensions || {}).length ? ' · ' : ''}{point.value == null ? point.quality : `${point.value.toLocaleString()} ${preview.result!.descriptor.unit} · ${point.quality}`}</p>)}</div>}
+              {widget.plugin_metric && widget.device_id && <PluginWidgetHistoryPreview widgetID={widget.id} deviceID={widget.device_id} reference={widget.plugin_metric} dark={dark}/>}
             </li>
           })}</ul>}
-          <p className="text-xs text-muted-foreground">当前编辑只保存 Widget 引用和布局。内建手动预览只读 Server 最新快照；插件历史需要在 Explore 显式选择时间范围。查询授权仍由 Server 执行，不会触发 Agent 采样。</p>
+          <p className="text-xs text-muted-foreground">当前编辑只保存 Widget 引用和布局。内建手动预览只读 Server 最新快照；插件历史预览要求显式时间范围和点数上限。查询授权仍由 Server 执行，不会触发 Agent 采样。</p>
         </>}
       </div>
     </div>}
@@ -361,12 +364,4 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 function layoutEnd(items: Placement[]) {
   return items.reduce((end, item) => Math.max(end, item.y + item.height), 0)
-}
-
-function pluginDescriptorKey(descriptor: Pick<PluginMetricDescriptor, 'plugin_id' | 'plugin_version' | 'collector_id' | 'metric_id'>) {
-  return [descriptor.plugin_id, descriptor.plugin_version, descriptor.collector_id, descriptor.metric_id].join('\u0000')
-}
-
-function pluginMetricLabel(reference: NonNullable<Widget['plugin_metric']>) {
-  return `${reference.plugin_id}@${reference.plugin_version} · ${reference.collector_id}/${reference.metric_id}`
 }

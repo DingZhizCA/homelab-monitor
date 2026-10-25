@@ -124,6 +124,8 @@ export interface PluginMetricDescriptor {
   last_observed_at: string
 }
 
+export type PluginMetricReference = Pick<PluginMetricDescriptor, 'plugin_id' | 'plugin_version' | 'collector_id' | 'metric_id'>
+
 export interface PluginHistoricalPoint {
   observed_at: string
   type: PluginMetricDescriptor['type']

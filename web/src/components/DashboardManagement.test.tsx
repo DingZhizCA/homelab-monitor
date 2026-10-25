@@ -74,6 +74,7 @@ describe('DashboardManagement', () => {
         const body = JSON.parse(String(init.body))
         return response({ id: 'dash-plugin', name: 'Plugins', scope: 'personal', draft: { number: 2, document: body.document } })
       }
+      if (path.startsWith('/api/v1/dashboard/plugin-metrics/history?')) return response({ device_id: 'node-a', plugin_id: 'smart', plugin_version: '1.0.0', collector_id: 'health', metric_id: 'temperature', from: '2026-10-25T00:00:00Z', to: '2026-10-25T01:00:00Z', points: [] })
       throw new Error(`unexpected request ${path}`)
     }))
 
@@ -84,8 +85,9 @@ describe('DashboardManagement', () => {
     fireEvent.change(await screen.findByLabelText('指标来源'), { target: { value: 'plugin' } })
     await waitFor(() => expect((screen.getByLabelText('插件指标') as HTMLSelectElement).value).toContain('smart'))
     fireEvent.click(screen.getByRole('button', { name: '添加时间序列' }))
-    expect(screen.getByText('历史请在 Explore 查询')).toBeInTheDocument()
+    expect(screen.getByLabelText('plugin-widget-1 插件历史开始时间')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '读取当前值' })).not.toBeInTheDocument()
+    expect(calls.some(call => call.path.includes('/plugin-metrics/history'))).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: '保存布局' }))
 
     await waitFor(() => expect(calls.some(call => call.path.endsWith('/personal') && call.init.method === 'PUT')).toBe(true))
@@ -95,7 +97,15 @@ describe('DashboardManagement', () => {
       plugin_metric: { plugin_id: 'smart', plugin_version: '1.0.0', collector_id: 'health', metric_id: 'temperature' },
     })])
     expect(saved.document.widgets[0]).not.toHaveProperty('descriptor_id')
-    expect(calls.some(call => call.path.includes('/plugin-metrics/history'))).toBe(false)
+    fireEvent.change(screen.getByLabelText('plugin-widget-1 插件历史开始时间'), { target: { value: '2026-10-25T00:00' } })
+    fireEvent.change(screen.getByLabelText('plugin-widget-1 插件历史结束时间'), { target: { value: '2026-10-25T01:00' } })
+    fireEvent.change(screen.getByLabelText('plugin-widget-1 插件历史最大点数'), { target: { value: '25' } })
+    fireEvent.click(screen.getByRole('button', { name: '查询插件历史' }))
+    expect(await screen.findByText('所选范围内没有插件历史点。')).toBeInTheDocument()
+    const historyURL = new URL(String(calls.find(call => call.path.includes('/plugin-metrics/history'))!.path), 'https://monitor.example')
+    expect(historyURL.searchParams.get('plugin_version')).toBe('1.0.0')
+    expect(historyURL.searchParams.get('collector_id')).toBe('health')
+    expect(historyURL.searchParams.get('limit')).toBe('25')
   })
 
   it('does not expose shared draft creation to Viewers', async () => {
