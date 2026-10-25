@@ -185,6 +185,11 @@ type alertEvaluationRuntimeConfig struct {
 	disabledBehavior  alerts.UncertainBehavior
 }
 
+type alertEvaluationRuntime struct {
+	engine    *alerts.Engine
+	incidents *server.IncidentHandler
+}
+
 func (c alertEvaluationRuntimeConfig) disabled() bool {
 	return !c.enabled && c.interval == 0 && c.timeout == 0 && c.maxRulesPerRun == 0 && c.maxIncidentStates == 0 && c.pendingFor == nil && c.recoveryFor == nil && c.unknownBehavior == "" && c.disabledBehavior == ""
 }
@@ -591,7 +596,7 @@ func buildAlertRuleRuntime(databases *storage.Databases, humanAuth *authRuntime,
 	return server.NewAlertRuleHandler(service, humanAuth.handler, config.maxBodyBytes)
 }
 
-func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRuntime, snapshots dashboard.SnapshotSource, ruleConfig alertRuleRuntimeConfig, config alertEvaluationRuntimeConfig) (*alerts.Engine, error) {
+func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRuntime, snapshots dashboard.SnapshotSource, ruleConfig alertRuleRuntimeConfig, config alertEvaluationRuntimeConfig) (*alertEvaluationRuntime, error) {
 	if config.disabled() {
 		return nil, nil
 	}
@@ -615,10 +620,22 @@ func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRu
 	if err != nil {
 		return nil, err
 	}
-	return alerts.NewEngine(samples, rules, incidents, evaluator, alerts.EngineConfig{
+	engine, err := alerts.NewEngine(samples, rules, incidents, evaluator, alerts.EngineConfig{
 		Interval: config.interval, Timeout: config.timeout, MaxRulesPerRun: config.maxRulesPerRun,
 		IncidentPolicy: alerts.IncidentPolicy{PendingFor: config.pendingFor, RecoveryFor: config.recoveryFor, UnknownBehavior: config.unknownBehavior, DisabledBehavior: config.disabledBehavior},
 	}, logAlertEvaluationObservation)
+	if err != nil {
+		return nil, err
+	}
+	service, err := alerts.NewIncidentService(incidents)
+	if err != nil {
+		return nil, err
+	}
+	handler, err := server.NewIncidentHandler(service, humanAuth.handler)
+	if err != nil {
+		return nil, err
+	}
+	return &alertEvaluationRuntime{engine: engine, incidents: handler}, nil
 }
 
 func logAlertEvaluationObservation(observation alerts.EngineObservation) {

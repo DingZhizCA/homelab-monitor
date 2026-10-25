@@ -312,7 +312,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	alertEngine, err := buildAlertEvaluationRuntime(databases, humanAuth, store, alertRuleRuntimeConfig{
+	alertEvaluation, err := buildAlertEvaluationRuntime(databases, humanAuth, store, alertRuleRuntimeConfig{
 		maxBodyBytes: *alertRuleMaxBodyBytes, maxDepth: *alertRuleMaxDepth, maxConditions: *alertRuleMaxConditions,
 	}, alertEvaluationRuntimeConfig{
 		enabled: *alertEvaluationEnabled, interval: *alertEvaluationInterval, timeout: *alertEvaluationTimeout,
@@ -347,6 +347,9 @@ func run() error {
 		options.Auth = humanAuth.handler
 		options.Dashboards = dashboards
 		options.AlertRules = alertRules
+		if alertEvaluation != nil {
+			options.Incidents = alertEvaluation.incidents
+		}
 		options.MetricQueries = humanAuth.queries
 		options.MetricHistory = humanAuth.history
 		options.PluginMetricHistory = pluginMetricHistory
@@ -433,11 +436,11 @@ func run() error {
 			<-spaceDone
 		}()
 	}
-	if alertEngine != nil {
+	if alertEvaluation != nil {
 		alertContext, cancelAlerts := context.WithCancel(ctx)
 		alertDone := make(chan struct{})
 		go func() {
-			alertEngine.Run(alertContext)
+			alertEvaluation.engine.Run(alertContext)
 			close(alertDone)
 		}()
 		defer func() {

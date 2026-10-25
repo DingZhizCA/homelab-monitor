@@ -27,6 +27,7 @@ type RouterOptions struct {
 	MetricsBatch        *MetricsBatchHandler
 	PluginMetricsBatch  *PluginMetricsBatchHandler
 	AlertRules          *AlertRuleHandler
+	Incidents           *IncidentHandler
 	WebDirectory        string
 }
 
@@ -64,6 +65,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.AlertRules != nil && (options.Auth == nil || options.AlertRules.auth != options.Auth) {
 		return nil, errors.New("alert-rule routes require the matching human authentication handler")
+	}
+	if options.Incidents != nil && (options.Auth == nil || options.Incidents.auth != options.Auth) {
+		return nil, errors.New("Incident routes require the matching human authentication handler")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", options.API.Health)
@@ -126,6 +130,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	if options.AlertRules != nil {
 		mux.Handle("/api/v1/owner/alert-rules", options.Auth.RequireOwner(http.HandlerFunc(options.AlertRules.Collection)))
 		mux.Handle("/api/v1/owner/alert-rules/revisions", options.Auth.RequireOwner(http.HandlerFunc(options.AlertRules.Revisions)))
+	}
+	if options.Incidents != nil {
+		mux.Handle("/api/v1/alerts/incidents", options.Auth.RequireUser(http.HandlerFunc(options.Incidents.Current)))
 	}
 	if options.WebDirectory != "" {
 		mux.Handle("/", NewSPAHandler(options.WebDirectory))

@@ -117,7 +117,7 @@ Server 可通过 `--tls-cert`、`--tls-key` 启用 HTTPS，并通过 `--agent-cr
 
 人类用户认证和指标查询也默认关闭。启用时必须提供 `--storage-dir`、至少一个 `--auth-origin`，以及正值的 `--auth-session-ttl`、`--auth-login-max-keys`、`--auth-login-max-attempts`、`--auth-login-window`、`--history-max-range` 和 `--history-max-points`；同时必须配置 HTTPS。插件历史路由另由正值 `--plugin-history-max-observations-scanned` 开启，并复用上述范围和点数预算；未启用插件聚合时读取原始层，启用后按四层窗口查询。扫描预算限制原始查询和聚合重算检查的插件观测数。正值 `--plugin-metric-max-descriptors` 独立开启每设备有界的已观测 Descriptor 目录。Web Explore 使用该目录构造包含插件版本的精确历史选择器，并显示每点的分辨率、聚合种类、质量和类型化摘要；查询不会启动 Collector。参数不完整时 Server 拒绝启动，不会采用隐式 TTL、限速或历史查询预算。启用后，Owner 与 Viewer 均可读取现有内建当前值和历史指标；账户变更和主动磁盘刷新仍要求 Owner。再提供正值的 `--dashboard-max-body-bytes` 会挂载持久化 Dashboard 路由；共享草稿的创建、保存、发布、回滚和审计在 `core.db` 同一事务提交，未配置时该路由保持关闭。Dashboard 文档可保存结构化版本化插件指标引用；只有插件目录与历史路由同时启用时，共享发布才接受目录中已精确观测的引用。
 
-告警规则管理同样默认关闭。完整启用人类认证后，再显式提供正值的 `--alert-rule-max-body-bytes`、`--alert-rule-max-depth` 和 `--alert-rule-max-conditions`，Server 才会挂载 Owner 规则路由。规则 Revision、当前指针及审计事件持久化到 `core.db`；这些参数只限制请求和表达式复杂度，不提供任何隐式阈值、规则模板或 Incident 策略。告警评估另由 `--alert-evaluation-enabled` 显式开启，并要求正值的 `--alert-evaluation-interval`、`--alert-evaluation-timeout`、`--alert-evaluation-max-rules`、`--incident-max-states`，以及明确给出 `--incident-pending-for`、`--incident-recovery-for`、`--incident-unknown-behavior` 和 `--incident-disabled-behavior`；立即转换必须写成 `0s`。调度器以稳定游标跨轮分页，只读取 Server 当前快照；单轮串行且有界，失败按规则隔离并记录，不触发采集。
+告警规则管理同样默认关闭。完整启用人类认证后，再显式提供正值的 `--alert-rule-max-body-bytes`、`--alert-rule-max-depth` 和 `--alert-rule-max-conditions`，Server 才会挂载 Owner 规则路由。规则 Revision、当前指针及审计事件持久化到 `core.db`；这些参数只限制请求和表达式复杂度，不提供任何隐式阈值、规则模板或 Incident 策略。告警评估另由 `--alert-evaluation-enabled` 显式开启，并要求正值的 `--alert-evaluation-interval`、`--alert-evaluation-timeout`、`--alert-evaluation-max-rules`、`--incident-max-states`，以及明确给出 `--incident-pending-for`、`--incident-recovery-for`、`--incident-unknown-behavior` 和 `--incident-disabled-behavior`；立即转换必须写成 `0s`。调度器以稳定游标跨轮分页，只读取 Server 当前快照；单轮串行且有界，失败按规则隔离并记录，不触发采集。评估启用后还会挂载只读的当前 Incident 查询，Owner 与 Viewer 都必须使用 HTTPS Session 并明确指定一个设备；查询复用评估器的同一仓储，不推进状态或触发采集。
 
 Agent 插件控制循环默认关闭。启用前必须显式配置插件公钥、权限 grant 文件、私有 staging/runtime/state 目录、专用 launcher 绝对路径、FD/进程数/单文件/虚拟地址空间/CPU 时间硬限制、协议版本、单制品大小、staging 总字节/包数/扫描上限、清理周期/宽限期/单轮删除量/超时、本地状态条目/字节上限、独立控制轮询间隔和操作超时；该循环与指标采样周期独立。插件观测另由 `plugin_metrics.enabled` 开启，要求私有持久队列目录、独立 tick 与单轮超时、策略数、单轮任务数、总并发、队列观测/样本/字节以及单批观测/样本/请求字节的全部显式上限。它按 Collection Policy 周期选取任务；Policy 或 Plugin Revision 变化时先调用无副作用配置校验，成功后才采集。失败或目标暂不可用也消耗一个策略周期，不会按 tick 高频重试。发送失败保留相同批次 ID，重启复验并恢复队列。launcher 在 `exec` 插件前设置硬 rlimit 和 `no_new_privs`，不引入提权后台服务。staging 目录持有跨进程单写者锁；每次新包写入前按磁盘实况核算，达到任一边界即拒绝。清理只删除超过宽限期且不属于 Reconciler current/previous 的完整包；异常结构或扫描超限时不删除，后续 Stage 继续拒绝新包，同时 Desired 对账仍可执行停用或维持现有版本。本地状态以设备身份摘要、校验和、单写者锁和原子替换保存已观察意图、当前/前序包以及退避/隔离决策。Agent 启动时不自动拉起旧进程；首次取得 Server Desired 后才复验暂存包并恢复，同一 Revision 的隔离跨重启保留，新 Revision 才解除。Collector 的采集开关、周期、超时和 JSON 配置由独立 Collection Policy 管理；策略必须绑定具体插件 Revision，不会因为安装插件而自动开始或加快采样。Server 端还必须完整启用 SQLite、人类认证、设备认证，并提供现有私有绝对路径 `--plugin-artifact-dir`，以及正值的 `--plugin-max-artifact-bytes`、`--plugin-max-repository-bytes`、`--plugin-max-packages`、`--plugin-max-scan-entries`、`--plugin-max-collection-policies`、`--plugin-cleanup-interval`、`--plugin-orphan-grace`、`--plugin-cleanup-delete-limit` 和 `--plugin-cleanup-timeout`。缺少任一依赖时插件控制路由不会启动。
 
@@ -152,6 +152,7 @@ Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设�
 | `PUT` | `/api/v1/owner/plugins/collection-policies` | 可选：Owner 发布绑定插件 Revision 且原子审计的采集策略 |
 | `GET/PUT` | `/api/v1/owner/alert-rules` | 可选：Owner 列出或按 CAS 保存 SQLite 持久化规则 |
 | `GET/POST` | `/api/v1/owner/alert-rules/revisions` | 可选：由 Owner 查询不可变规则历史或以新 Revision 回滚 |
+| `GET` | `/api/v1/alerts/incidents` | 可选：评估启用后由认证用户按一个 `device_id` 查询当前 Incident 转换状态 |
 
 主动磁盘刷新可能唤醒 HDD，因此必须明确授权：
 
@@ -224,7 +225,7 @@ web/                  React Dashboard
 
 - 兼容单快照接口只更新内存；只有持久化批量接口写入的设备快照会在 Server 重启时恢复。刷新任务仍为进程内状态，不会恢复。
 - 持久化认证、Owner 管理、内建当前指标、分层历史查询和 Dashboard 管理必须通过完整显式参数启用；默认运行保持这些路由关闭。`cmd/server` 的持久化历史按配置窗口读取日、小时、分钟和原始层，每个内建历史点显式返回分辨率与原始/均值聚合种类；底层原始历史适配器继续保留给兼容调用与测试。共享发布允许当前内建 Descriptor；插件引用还要求目录和历史查询面同时启用并通过完整版本身份的已观测校验。更细粒度设备/字段 ACL 和敏感操作再认证尚未实现。
-- 告警规则的不可变历史、回滚和审计可持久化装配；有界评估调度可从 Server 当前快照推进带容量和时间戳 CAS 的 SQLite Incident 状态。规则删除和跨 Revision Incident 迁移、通知去重、静默和投递仍未实现。
+- 告警规则的不可变历史、回滚和审计可持久化装配；有界评估调度可从 Server 当前快照推进带容量和时间戳 CAS 的 SQLite Incident 状态，Owner 与 Viewer 可按设备读取该仓储的当前状态。规则删除和跨 Revision Incident 迁移、Incident 历史、确认/静默、通知去重和投递仍未实现。
 - 插件 Desired/Reported State、审计和制品路由可由 `cmd/server` 显式装配；Agent 可在有界私有状态中跨重启恢复回滚关联和同 Revision 隔离。Server 制品仓库有显式总字节、包数量和扫描边界，并按 Desired 引用与宽限期执行有界清理；参数仍需在目标设备调优。
 - Agent 的有界批量队列与插件控制均默认关闭，启用插件仍需本机信任根、权限 grant、私有状态目录，以及 staging 单包/总字节/包数/扫描/清理和全部运行参数有效。
 - 内建与插件指标已有 SQLite 原始持久化、事务型分钟/小时/日聚合队列、分层查询与保留、显式 PASSIVE checkpoint、软硬容量保护，以及独立的 WAL 截断和 incremental vacuum 物理回收。插件聚合保留类型语义、版本和标签，并显式返回粒度；Web Explore 已用已观测 Descriptor 目录构造精确历史选择器并展示类型化结果。Dashboard 编辑器可保存结构化插件引用，Server 共享发布会精确校验；插件 Widget 可按用户填写的范围和点数上限查询类型化历史。维护及聚合参数尚未在目标设备调优；流量归属账本、包声明元数据发布和完整 Incident/通知流程仍未实现。

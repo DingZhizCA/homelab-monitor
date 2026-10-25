@@ -318,7 +318,7 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	zero := time.Duration(0)
-	alertEngine, err := buildAlertEvaluationRuntime(databases, humanAuth, store,
+	alertEvaluation, err := buildAlertEvaluationRuntime(databases, humanAuth, store,
 		alertRuleRuntimeConfig{maxBodyBytes: 1 << 20, maxDepth: 4, maxConditions: 8},
 		alertEvaluationRuntimeConfig{
 			enabled: true, interval: time.Hour, timeout: time.Second, maxRulesPerRun: 10, maxIncidentStates: 10,
@@ -366,7 +366,7 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	t.Cleanup(func() { _ = pluginsRuntime.Close() })
 	router, err := server.NewRouter(server.RouterOptions{
 		API: api, MetricsBatch: metricsBatch, Auth: humanAuth.handler,
-		Dashboards: dashboardHandler, AlertRules: alertRuleHandler, MetricQueries: humanAuth.queries, MetricHistory: humanAuth.history,
+		Dashboards: dashboardHandler, AlertRules: alertRuleHandler, Incidents: alertEvaluation.incidents, MetricQueries: humanAuth.queries, MetricHistory: humanAuth.history,
 		PluginControl: pluginsRuntime.control, PluginArtifacts: pluginsRuntime.artifacts, PluginAdmin: pluginsRuntime.admin,
 	})
 	if err != nil {
@@ -442,13 +442,20 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("alert-rule save status=%d body=%s", response.Code, response.Body.String())
 	}
-	alertSummary := alertEngine.RunOnce(context.Background())
+	alertSummary := alertEvaluation.engine.RunOnce(context.Background())
 	if alertSummary.Succeeded != 1 || alertSummary.Failed != 0 {
 		t.Fatalf("alert evaluation summary=%+v", alertSummary)
 	}
 	var incidentJSON string
 	if err := databases.Core.QueryRow(`SELECT state_json FROM incident_states WHERE device_id = ? AND rule_id = ?`, "node-a", "high-cpu").Scan(&incidentJSON); err != nil || !strings.Contains(incidentJSON, `"status":"inactive"`) {
 		t.Fatalf("incident state=%s err=%v", incidentJSON, err)
+	}
+	request = httptest.NewRequest(http.MethodGet, "https://monitor.example/api/v1/alerts/incidents?device_id=node-a", nil)
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"rule_id":"high-cpu"`) {
+		t.Fatalf("Incident query status=%d body=%s", response.Code, response.Body.String())
 	}
 
 	for _, path := range []string{

@@ -15,7 +15,7 @@
 | flow | Internet/LAN/Tailnet 计量与去重账本 | 分类流量查询 |
 | plugins | 包、签名、版本、期望/实际状态 | 制品分发与部署管理 |
 | collectors | 独立 Collection Policy、Remote Host / Agent 协同配置 | 按绑定插件 Revision 调度、限时执行 |
-| alerting | 规则版本、评估、Incident | 告警查询及状态迁移 |
+| alerting | 规则版本、评估、Incident、认证用户的当前状态查询 | 告警查询及状态迁移 |
 | notifications | 投递任务、订阅、静默 | Push、站内通知 |
 | auth | 用户、角色、Session、设备凭据 | 登录、鉴权、凭据生命周期 |
 | dashboards | Dashboard、Widget、草稿与发布版本 | 受权布局操作 |
