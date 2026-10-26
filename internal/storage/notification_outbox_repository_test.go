@@ -25,24 +25,24 @@ func TestNotificationOutboxRepositoryReadsAndAcknowledgesOldestIntent(t *testing
 	if _, err := incidents.Advance(context.Background(), rule, storedIncidentResult(1, alerts.StateTrue), base, storedIncidentPolicy(), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	outbox, err := NewNotificationOutboxRepository(databases.Core, 1)
+	outbox, err := NewNotificationOutboxRepository(databases.Core, 1, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := outbox.Pending(context.Background(), 2); !errors.Is(err, ErrInvalidNotificationOutboxRequest) {
+	if _, err := outbox.Pending(context.Background(), base, 2); !errors.Is(err, ErrInvalidNotificationOutboxRequest) {
 		t.Fatalf("over-limit read error=%v", err)
 	}
-	intents, err := outbox.Pending(context.Background(), 1)
-	if err != nil || len(intents) != 1 || intents[0].Kind != notifications.IntentFiring {
+	intents, err := outbox.Pending(context.Background(), base, 1)
+	if err != nil || len(intents) != 1 || intents[0].Intent.Kind != notifications.IntentFiring {
 		t.Fatalf("pending=%+v err=%v", intents, err)
 	}
-	if err := outbox.Acknowledge(context.Background(), intents[0].ID); err != nil {
+	if err := outbox.Acknowledge(context.Background(), intents[0].Intent.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := outbox.Acknowledge(context.Background(), intents[0].ID); err != nil {
+	if err := outbox.Acknowledge(context.Background(), intents[0].Intent.ID); err != nil {
 		t.Fatalf("idempotent acknowledgement: %v", err)
 	}
-	intents, err = outbox.Pending(context.Background(), 1)
+	intents, err = outbox.Pending(context.Background(), base, 1)
 	if err != nil || len(intents) != 0 {
 		t.Fatalf("pending after acknowledgement=%+v err=%v", intents, err)
 	}
@@ -65,11 +65,57 @@ func TestNotificationOutboxRepositoryRejectsCorruptStoredIdentity(t *testing.T) 
 	if _, err := databases.Core.Exec(`UPDATE notification_intent_outbox SET rule_id = 'other'`); err != nil {
 		t.Fatal(err)
 	}
-	outbox, err := NewNotificationOutboxRepository(databases.Core, 1)
+	outbox, err := NewNotificationOutboxRepository(databases.Core, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := outbox.Pending(context.Background(), 1); err == nil {
+	if _, err := outbox.Pending(context.Background(), base, 1); err == nil {
 		t.Fatal("corrupt notification intent was accepted")
+	}
+}
+
+func TestNotificationOutboxRepositoryDefersAndDeadLettersAtomically(t *testing.T) {
+	databases := openTestDatabases(t)
+	incidents, err := NewIncidentRepositoryWithNotificationOutbox(databases.Core, 1, 1, 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdAt := time.Date(2026, 10, 26, 19, 0, 0, 0, time.UTC)
+	if _, err := incidents.Advance(context.Background(), storedIncidentRule(1), storedIncidentResult(1, alerts.StateTrue), createdAt, storedIncidentPolicy(), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := NewNotificationOutboxRepository(databases.Core, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := outbox.Pending(context.Background(), createdAt, 1)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("initial pending=%+v err=%v", items, err)
+	}
+	deferredUntil := createdAt.Add(time.Minute)
+	failure := notifications.Failure{IntentID: items[0].Intent.ID, AttemptCount: 1, FailedAt: createdAt, NextAttempt: deferredUntil, LastError: "sink unavailable"}
+	if err := outbox.RecordFailure(context.Background(), failure); err != nil {
+		t.Fatal(err)
+	}
+	items, err = outbox.Pending(context.Background(), deferredUntil.Add(-time.Nanosecond), 1)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("early pending=%+v err=%v", items, err)
+	}
+	items, err = outbox.Pending(context.Background(), deferredUntil, 1)
+	if err != nil || len(items) != 1 || items[0].AttemptCount != 1 {
+		t.Fatalf("ready pending=%+v err=%v", items, err)
+	}
+	terminal := notifications.Failure{IntentID: items[0].Intent.ID, AttemptCount: 2, FailedAt: deferredUntil, LastError: "still unavailable", DeadLetter: true}
+	if err := outbox.RecordFailure(context.Background(), terminal); err != nil {
+		t.Fatal(err)
+	}
+	items, err = outbox.Pending(context.Background(), deferredUntil, 1)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("pending after dead letter=%+v err=%v", items, err)
+	}
+	var attempts int
+	var lastError string
+	if err := databases.Core.QueryRow(`SELECT attempt_count, last_error FROM notification_intent_dead_letters WHERE intent_id = ?`, terminal.IntentID).Scan(&attempts, &lastError); err != nil || attempts != 2 || lastError != terminal.LastError {
+		t.Fatalf("dead letter attempts=%d error=%q query=%v", attempts, lastError, err)
 	}
 }

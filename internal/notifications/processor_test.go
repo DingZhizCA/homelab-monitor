@@ -19,20 +19,21 @@ func TestProcessorIsolatesHandlerFailureAndAcknowledgesSuccess(t *testing.T) {
 	outbox := &processorOutbox{pending: []Intent{first, second}}
 	handler := &processorHandler{fail: map[string]error{first.ID: errors.New("sink unavailable")}}
 	var observations []ProcessObservation
-	processor, err := NewProcessor(outbox, handler, 2, func(observation ProcessObservation) {
+	retry := RetryPolicy{MaxAttempts: 3, InitialBackoff: time.Second, MaxBackoff: time.Minute, MaxErrorBytes: 80}
+	processor, err := NewProcessor(outbox, handler, 2, retry, func(observation ProcessObservation) {
 		observations = append(observations, observation)
-	})
+	}, func() time.Time { return baseProcessorTime })
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err := processor.RunOnce(context.Background())
-	if err != nil || result != (ProcessResult{Read: 2, Handled: 1, Failed: 1, Acknowledged: 1}) {
+	if err != nil || result != (ProcessResult{Read: 2, Handled: 1, Deferred: 1, Acknowledged: 1}) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if len(handler.handled) != 2 || len(outbox.acknowledged) != 1 || outbox.acknowledged[0] != second.ID {
 		t.Fatalf("handled=%v acknowledged=%v", handler.handled, outbox.acknowledged)
 	}
-	if len(observations) != 2 || observations[0].Stage != ProcessStageHandle || observations[0].Err == nil || observations[1].Stage != ProcessStageAcknowledge || observations[1].Err != nil {
+	if len(observations) != 3 || observations[0].Stage != ProcessStageHandle || observations[0].Err == nil || observations[1].Stage != ProcessStageDefer || observations[1].Err != nil || observations[2].Stage != ProcessStageAcknowledge || observations[2].Err != nil {
 		t.Fatalf("observations=%+v", observations)
 	}
 }
@@ -40,7 +41,7 @@ func TestProcessorIsolatesHandlerFailureAndAcknowledgesSuccess(t *testing.T) {
 func TestProcessorLeavesHandledIntentWhenAcknowledgementFails(t *testing.T) {
 	intent := processorIntent(t, "a", time.Date(2026, 10, 26, 16, 0, 0, 0, time.UTC))
 	outbox := &processorOutbox{pending: []Intent{intent}, acknowledgeErr: errors.New("database busy")}
-	processor, err := NewProcessor(outbox, &processorHandler{}, 1, func(ProcessObservation) {})
+	processor, err := NewProcessor(outbox, &processorHandler{}, 1, RetryPolicy{MaxAttempts: 1, InitialBackoff: time.Second, MaxBackoff: time.Second, MaxErrorBytes: 80}, func(ProcessObservation) {}, func() time.Time { return baseProcessorTime })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,10 +55,20 @@ type processorOutbox struct {
 	pending        []Intent
 	acknowledged   []string
 	acknowledgeErr error
+	failures       []Failure
 }
 
-func (o *processorOutbox) Pending(context.Context, int) ([]Intent, error) {
-	return append([]Intent(nil), o.pending...), nil
+func (o *processorOutbox) Pending(context.Context, time.Time, int) ([]PendingIntent, error) {
+	items := make([]PendingIntent, len(o.pending))
+	for index, intent := range o.pending {
+		items[index] = PendingIntent{Intent: intent}
+	}
+	return items, nil
+}
+
+func (o *processorOutbox) RecordFailure(_ context.Context, failure Failure) error {
+	o.failures = append(o.failures, failure)
+	return nil
 }
 
 func (o *processorOutbox) Acknowledge(_ context.Context, id string) error {
@@ -67,6 +78,8 @@ func (o *processorOutbox) Acknowledge(_ context.Context, id string) error {
 	o.acknowledged = append(o.acknowledged, id)
 	return nil
 }
+
+var baseProcessorTime = time.Date(2026, 10, 26, 16, 30, 0, 0, time.UTC)
 
 type processorHandler struct {
 	fail    map[string]error

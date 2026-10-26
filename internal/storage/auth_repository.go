@@ -247,6 +247,31 @@ var coreMigrations = []Migration{
 	CREATE INDEX recipient_notifications_push
 		ON recipient_notifications (push_enabled, created_at, notification_id);`,
 	},
+	{
+		Version: 13,
+		Name:    "notification_retry_and_dead_letters",
+		SQL: `ALTER TABLE notification_intent_outbox ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0);
+	ALTER TABLE notification_intent_outbox ADD COLUMN next_attempt_at TEXT;
+	ALTER TABLE notification_intent_outbox ADD COLUMN last_error TEXT NOT NULL DEFAULT '';
+	CREATE INDEX notification_intent_outbox_ready
+		ON notification_intent_outbox (next_attempt_at, created_at, intent_id);
+	CREATE TABLE notification_intent_dead_letters (
+		intent_id TEXT PRIMARY KEY,
+		transition_id TEXT NOT NULL UNIQUE,
+		device_id TEXT NOT NULL,
+		rule_id TEXT NOT NULL,
+		rule_revision INTEGER NOT NULL CHECK (rule_revision > 0),
+		kind TEXT NOT NULL CHECK (kind IN ('firing', 'recovery')),
+		delivery_policy TEXT NOT NULL CHECK (delivery_policy IN ('push_eligible', 'record_only')),
+		created_at TEXT NOT NULL,
+		attempt_count INTEGER NOT NULL CHECK (attempt_count > 0),
+		failed_at TEXT NOT NULL,
+		last_error TEXT NOT NULL,
+		intent_json BLOB NOT NULL
+	);
+	CREATE INDEX notification_intent_dead_letters_time
+		ON notification_intent_dead_letters (failed_at DESC, intent_id DESC);`,
+	},
 }
 
 // AuthRepository implements the auth user and session persistence boundaries.

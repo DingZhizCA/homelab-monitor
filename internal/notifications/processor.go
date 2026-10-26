@@ -8,6 +8,7 @@ package notifications
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 type Handler interface {
@@ -17,6 +18,8 @@ type Handler interface {
 type ProcessResult struct {
 	Read         int
 	Handled      int
+	Deferred     int
+	DeadLettered int
 	Failed       int
 	Acknowledged int
 }
@@ -26,6 +29,8 @@ type ProcessStage string
 const (
 	ProcessStageRead        ProcessStage = "read"
 	ProcessStageHandle      ProcessStage = "handle"
+	ProcessStageDefer       ProcessStage = "defer"
+	ProcessStageDeadLetter  ProcessStage = "dead_letter"
 	ProcessStageAcknowledge ProcessStage = "acknowledge"
 )
 
@@ -43,30 +48,50 @@ type Processor struct {
 	handler  Handler
 	maxBatch int
 	observe  Observer
+	retry    RetryPolicy
+	now      func() time.Time
 }
 
-func NewProcessor(outbox Outbox, handler Handler, maxBatch int, observe Observer) (*Processor, error) {
-	if outbox == nil || handler == nil || maxBatch < 1 || observe == nil {
-		return nil, errors.New("notification outbox, handler, positive batch limit, and observer are required")
+func NewProcessor(outbox Outbox, handler Handler, maxBatch int, retry RetryPolicy, observe Observer, now func() time.Time) (*Processor, error) {
+	if outbox == nil || handler == nil || maxBatch < 1 || retry.Validate() != nil || observe == nil || now == nil {
+		return nil, errors.New("notification processor requires outbox, handler, positive limits, observer, and clock")
 	}
-	return &Processor{outbox: outbox, handler: handler, maxBatch: maxBatch, observe: observe}, nil
+	return &Processor{outbox: outbox, handler: handler, maxBatch: maxBatch, retry: retry, observe: observe, now: now}, nil
 }
 
 // RunOnce handles the oldest bounded batch and isolates failures by intent.
 func (p *Processor) RunOnce(ctx context.Context) (ProcessResult, error) {
-	intents, err := p.outbox.Pending(ctx, p.maxBatch)
+	intents, err := p.outbox.Pending(ctx, p.now().UTC(), p.maxBatch)
 	if err != nil {
 		p.observe(ProcessObservation{Stage: ProcessStageRead, Err: err})
 		return ProcessResult{}, err
 	}
 	result := ProcessResult{Read: len(intents)}
-	for _, intent := range intents {
+	for _, item := range intents {
+		intent := item.Intent
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
 		if err := p.handler.Handle(ctx, intent); err != nil {
-			result.Failed++
 			p.observe(ProcessObservation{IntentID: intent.ID, Stage: ProcessStageHandle, Err: err})
+			failure, planErr := PlanFailure(intent.ID, item.AttemptCount, p.now(), err, p.retry)
+			if planErr != nil {
+				result.Failed++
+				p.observe(ProcessObservation{IntentID: intent.ID, Stage: ProcessStageDefer, Err: planErr})
+				continue
+			}
+			if persistErr := p.outbox.RecordFailure(ctx, failure); persistErr != nil {
+				result.Failed++
+				p.observe(ProcessObservation{IntentID: intent.ID, Stage: ProcessStageDefer, Err: persistErr})
+				continue
+			}
+			if failure.DeadLetter {
+				result.DeadLettered++
+				p.observe(ProcessObservation{IntentID: intent.ID, Stage: ProcessStageDeadLetter})
+			} else {
+				result.Deferred++
+				p.observe(ProcessObservation{IntentID: intent.ID, Stage: ProcessStageDefer})
+			}
 			continue
 		}
 		result.Handled++
