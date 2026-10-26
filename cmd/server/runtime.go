@@ -226,7 +226,10 @@ func (c alertEvaluationRuntimeConfig) disabled() bool {
 	return !c.enabled && c.interval == 0 && c.timeout == 0 && c.maxRulesPerRun == 0 && c.maxIncidentStates == 0 && c.maxIncidentArchives == 0 && c.maxIncidentTransitions == 0 && c.maxNotificationIntents == 0 && c.archiveCleanupInterval == 0 && c.archiveRetention == 0 && c.archiveCleanupLimit == 0 && c.archiveCleanupTimeout == 0 && c.pendingFor == nil && c.recoveryFor == nil && c.unknownBehavior == "" && c.disabledBehavior == ""
 }
 
-type notificationProcessingRuntime struct{ engine *notifications.Engine }
+type notificationProcessingRuntime struct {
+	engine *notifications.Engine
+	inApp  *server.InAppNotificationHandler
+}
 
 type pluginRuntimeConfig struct {
 	artifactDirectory     string
@@ -652,11 +655,11 @@ func buildNotificationSubscriptionRuntime(databases *storage.Databases, humanAut
 	return server.NewNotificationSubscriptionHandler(service, humanAuth.handler, config.maxBodyBytes)
 }
 
-func buildNotificationProcessingRuntime(databases *storage.Databases, subscriptions notificationSubscriptionRuntimeConfig, config notificationProcessingRuntimeConfig) (*notificationProcessingRuntime, error) {
+func buildNotificationProcessingRuntime(databases *storage.Databases, humanAuth *authRuntime, subscriptions notificationSubscriptionRuntimeConfig, config notificationProcessingRuntimeConfig) (*notificationProcessingRuntime, error) {
 	if config.disabled() {
 		return nil, nil
 	}
-	if databases == nil || subscriptions.maxRecords < 1 || subscriptions.maxPerUser < 1 || subscriptions.maxRecipients < 1 || config.interval <= 0 || config.timeout <= 0 || config.maxBatch < 1 || config.maxPending < 1 || config.maxDeadLetters < 1 || config.maxNotifications < 1 || config.maxAttempts < 1 || config.maxErrorBytes < 1 || config.initialBackoff <= 0 || config.maxBackoff < config.initialBackoff {
+	if databases == nil || humanAuth == nil || humanAuth.handler == nil || subscriptions.maxBodyBytes < 1 || subscriptions.maxRecords < 1 || subscriptions.maxPerUser < 1 || subscriptions.maxRecipients < 1 || config.interval <= 0 || config.timeout <= 0 || config.maxBatch < 1 || config.maxPending < 1 || config.maxDeadLetters < 1 || config.maxNotifications < 1 || config.maxAttempts < 1 || config.maxErrorBytes < 1 || config.initialBackoff <= 0 || config.maxBackoff < config.initialBackoff {
 		return nil, errors.New("notification processing requires storage, subscriptions, and complete positive scheduling, retry, and capacity limits")
 	}
 	recipients, err := storage.NewNotificationSubscriptionRepository(databases.Core, subscriptions.maxRecords, subscriptions.maxPerUser, subscriptions.maxRecipients)
@@ -684,7 +687,15 @@ func buildNotificationProcessingRuntime(databases *storage.Databases, subscripti
 	if err != nil {
 		return nil, err
 	}
-	return &notificationProcessingRuntime{engine: engine}, nil
+	inAppService, err := notifications.NewInAppService(sink, time.Now)
+	if err != nil {
+		return nil, err
+	}
+	inApp, err := server.NewInAppNotificationHandler(inAppService, humanAuth.handler, subscriptions.maxBodyBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &notificationProcessingRuntime{engine: engine, inApp: inApp}, nil
 }
 
 func logNotificationProcessObservation(observation notifications.ProcessObservation) {

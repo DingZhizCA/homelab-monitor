@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/notifications"
 )
@@ -22,12 +23,67 @@ type NotificationFanoutRepository struct {
 }
 
 var _ notifications.NotificationSink = (*NotificationFanoutRepository)(nil)
+var _ notifications.InAppRepository = (*NotificationFanoutRepository)(nil)
 
 func NewNotificationFanoutRepository(database *sql.DB, maxRecords int) (*NotificationFanoutRepository, error) {
 	if database == nil || maxRecords < 1 {
 		return nil, errors.New("core database and positive recipient notification capacity are required")
 	}
 	return &NotificationFanoutRepository{database: database, maxRecords: maxRecords}, nil
+}
+
+func (r *NotificationFanoutRepository) ListForUser(ctx context.Context, userID string, limit int) ([]notifications.InAppNotification, error) {
+	if userID == "" || limit < 1 || limit > r.maxRecords {
+		return nil, errors.New("invalid in-app notification query")
+	}
+	rows, err := r.database.QueryContext(ctx, `SELECT notification_json, read_at FROM recipient_notifications WHERE user_id = ? AND in_app = 1 ORDER BY created_at DESC, notification_id DESC LIMIT ?`, userID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list in-app notifications: %w", err)
+	}
+	defer rows.Close()
+	items := make([]notifications.InAppNotification, 0)
+	for rows.Next() {
+		var encoded []byte
+		var readAt sql.NullString
+		if err := rows.Scan(&encoded, &readAt); err != nil {
+			return nil, fmt.Errorf("scan in-app notification: %w", err)
+		}
+		var notification notifications.Notification
+		if err := json.Unmarshal(encoded, &notification); err != nil || notifications.ValidateNotification(notification) != nil || notification.UserID != userID || !notification.Channels.InApp {
+			return nil, errors.New("stored in-app notification is invalid")
+		}
+		item := notifications.InAppNotification{Notification: notification}
+		if readAt.Valid {
+			parsed, err := time.Parse(storageTimeLayout, readAt.String)
+			if err != nil {
+				return nil, errors.New("stored in-app read time is invalid")
+			}
+			item.ReadAt = &parsed
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate in-app notifications: %w", err)
+	}
+	return items, nil
+}
+
+func (r *NotificationFanoutRepository) MarkRead(ctx context.Context, userID, notificationID string, readAt time.Time) error {
+	if userID == "" || notifications.ValidateIntentID(notificationID) != nil || readAt.IsZero() {
+		return notifications.ErrNotificationNotFound
+	}
+	result, err := r.database.ExecContext(ctx, `UPDATE recipient_notifications SET read_at = COALESCE(read_at, ?) WHERE notification_id = ? AND user_id = ? AND in_app = 1`, storageTimestamp(readAt.UTC()), notificationID, userID)
+	if err != nil {
+		return fmt.Errorf("mark in-app notification read: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return notifications.ErrNotificationNotFound
+	}
+	return nil
 }
 
 func (r *NotificationFanoutRepository) Materialize(ctx context.Context, intent notifications.Intent, recipients []notifications.Recipient) error {

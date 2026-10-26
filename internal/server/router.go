@@ -29,6 +29,7 @@ type RouterOptions struct {
 	AlertRules                *AlertRuleHandler
 	Incidents                 *IncidentHandler
 	NotificationSubscriptions *NotificationSubscriptionHandler
+	InAppNotifications        *InAppNotificationHandler
 	WebDirectory              string
 }
 
@@ -72,6 +73,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.NotificationSubscriptions != nil && (options.Auth == nil || options.NotificationSubscriptions.auth != options.Auth) {
 		return nil, errors.New("notification subscription routes require the matching human authentication handler")
+	}
+	if options.InAppNotifications != nil && (options.Auth == nil || options.InAppNotifications.auth != options.Auth) {
+		return nil, errors.New("in-app notification routes require the matching human authentication handler")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", options.API.Health)
@@ -145,6 +149,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.NotificationSubscriptions != nil {
 		mux.Handle("/api/v1/notifications/subscriptions", options.Auth.RequireUser(http.HandlerFunc(options.NotificationSubscriptions.Collection)))
+	}
+	if options.InAppNotifications != nil {
+		mux.Handle("/api/v1/notifications", options.Auth.RequireUser(http.HandlerFunc(options.InAppNotifications.Collection)))
 	}
 	if options.WebDirectory != "" {
 		mux.Handle("/", NewSPAHandler(options.WebDirectory))

@@ -196,6 +196,23 @@ export interface NotificationSubscription {
   channels: { in_app: boolean; push: boolean }
 }
 
+/** Materialized in-app notification belonging to the authenticated user. */
+export interface InAppNotification {
+  notification: {
+    id: string
+    intent_id: string
+    user_id: string
+    device_id: string
+    rule_id: string
+    rule_revision: number
+    severity: 'critical' | 'warning' | 'info'
+    kind: 'firing' | 'recovery'
+    channels: { in_app: boolean; push: boolean }
+    created_at: string
+  }
+  read_at?: string
+}
+
 /** Lifecycle state for one explicitly authorized disk-capacity refresh. */
 export interface RefreshJob {
   request_id: string

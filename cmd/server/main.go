@@ -354,7 +354,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	notificationProcessing, err := buildNotificationProcessingRuntime(databases, notificationSubscriptionRuntimeConfig{
+	notificationProcessing, err := buildNotificationProcessingRuntime(databases, humanAuth, notificationSubscriptionRuntimeConfig{
 		maxBodyBytes: *notificationSubscriptionMaxBodyBytes, maxRecords: *notificationSubscriptionMaxRecords,
 		maxPerUser: *notificationSubscriptionMaxPerUser, maxRecipients: *notificationMaxRecipients,
 	}, notificationProcessingRuntimeConfig{
@@ -395,6 +395,9 @@ func run() error {
 		options.Dashboards = dashboards
 		options.AlertRules = alertRules
 		options.NotificationSubscriptions = notificationSubscriptions
+		if notificationProcessing != nil {
+			options.InAppNotifications = notificationProcessing.inApp
+		}
 		if alertEvaluation != nil {
 			options.Incidents = alertEvaluation.incidents
 		}

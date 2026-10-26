@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { BellRing, RefreshCw } from 'lucide-react'
 import { AlertRuleManagement } from '@/components/AlertRuleManagement'
 import { NotificationSubscriptionManagement } from '@/components/NotificationSubscriptionManagement'
+import { InAppNotificationList } from '@/components/InAppNotificationList'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -79,6 +80,7 @@ export function AlertsOverview({ devices, role }: { devices: DeviceState[]; role
     </Card>)}</div>}
     {role === 'owner' && activeDeviceID && <AlertRuleManagement key={activeDeviceID} deviceID={activeDeviceID} incidents={incidents} onActivated={() => void load(activeDeviceID)}/>}
     {activeDeviceID && <NotificationSubscriptionManagement key={`subscriptions/${activeDeviceID}`} deviceID={activeDeviceID}/>}
+    <InAppNotificationList/>
   </section>
 }
 

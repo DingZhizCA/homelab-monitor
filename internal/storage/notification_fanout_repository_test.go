@@ -38,6 +38,21 @@ func TestNotificationFanoutRepositoryMaterializesReplayIdempotently(t *testing.T
 	if err := databases.Core.QueryRow(`SELECT COUNT(*), SUM(in_app), SUM(push_enabled) FROM recipient_notifications`).Scan(&count, &inApp, &push); err != nil || count != 2 || inApp != 1 || push != 1 {
 		t.Fatalf("count=%d in_app=%d push=%d err=%v", count, inApp, push, err)
 	}
+	items, err := repository.ListForUser(context.Background(), first, 2)
+	if err != nil || len(items) != 1 || items[0].ReadAt != nil {
+		t.Fatalf("in-app items=%+v err=%v", items, err)
+	}
+	readAt := intent.CreatedAt.Add(time.Minute)
+	if err := repository.MarkRead(context.Background(), first, items[0].Notification.ID, readAt); err != nil {
+		t.Fatal(err)
+	}
+	items, err = repository.ListForUser(context.Background(), first, 2)
+	if err != nil || len(items) != 1 || items[0].ReadAt == nil || !items[0].ReadAt.Equal(readAt) {
+		t.Fatalf("read items=%+v err=%v", items, err)
+	}
+	if err := repository.MarkRead(context.Background(), second, items[0].Notification.ID, readAt); !errors.Is(err, notifications.ErrNotificationNotFound) {
+		t.Fatalf("cross-user read error=%v", err)
+	}
 }
 
 func TestNotificationFanoutRepositoryRollsBackWholeFanoutAtCapacity(t *testing.T) {

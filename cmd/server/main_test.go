@@ -106,10 +106,10 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if handler, err := buildNotificationSubscriptionRuntime(nil, nil, alertRuleRuntimeConfig{}, notificationSubscriptionRuntimeConfig{maxRecords: 1}); err == nil || handler != nil {
 		t.Fatalf("partial notification subscription handler=%v err=%v", handler, err)
 	}
-	if runtime, err := buildNotificationProcessingRuntime(nil, notificationSubscriptionRuntimeConfig{}, notificationProcessingRuntimeConfig{}); err != nil || runtime != nil {
+	if runtime, err := buildNotificationProcessingRuntime(nil, nil, notificationSubscriptionRuntimeConfig{}, notificationProcessingRuntimeConfig{}); err != nil || runtime != nil {
 		t.Fatalf("disabled notification processing runtime=%v err=%v", runtime, err)
 	}
-	if runtime, err := buildNotificationProcessingRuntime(nil, notificationSubscriptionRuntimeConfig{}, notificationProcessingRuntimeConfig{maxBatch: 1}); err == nil || runtime != nil {
+	if runtime, err := buildNotificationProcessingRuntime(nil, nil, notificationSubscriptionRuntimeConfig{}, notificationProcessingRuntimeConfig{maxBatch: 1}); err == nil || runtime != nil {
 		t.Fatalf("partial notification processing runtime=%v err=%v", runtime, err)
 	}
 	if engine, err := buildAlertEvaluationRuntime(nil, nil, nil, alertRuleRuntimeConfig{}, alertEvaluationRuntimeConfig{}); err != nil || engine != nil {
