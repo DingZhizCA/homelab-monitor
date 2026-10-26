@@ -39,7 +39,7 @@
 `cmd/server` 只负责读取启动参数、构造当前实现并启动 HTTP Server；稳定 API 路径由 `internal/server.NewRouter` 装配。插件控制面在完整显式配置 SQLite、人类与设备认证、私有制品目录、单包/总量容量、每设备 Collection Policy 数量上限及有界清理参数时，使用 `storage.PluginRepository` 与 `FileArtifactRepository` 构造插件 Desired/Reported、独立 Collection Policy、制品下载、Owner 管理和制品维护；默认不挂载。业务 Handler 只依赖带 Context 与错误返回的仓储边界，数据库错误不会被静默转换为空 Desired State。Collection Policy 写入与审计同事务提交，并在事务内复核其绑定的插件 Revision 仍启用；新增策略键还在同一事务检查每设备容量。Owner 发布与制品维护共享应用层互斥边界，制品仓库自身再以进程内读写锁和跨进程文件锁保护读取、导入和删除。
 
 ## 任务调度与事件
-定期采集由 Host/Agent 调度器负责；历史聚合、告警评估与通知由 Server 内部受控工作队列执行。第一版可使用有界内存队列加持久化任务状态，不引入外部 Message Broker。跨域事件需定义幂等键和失败重放策略。当前通知域的纯规划器接收已验证的 Incident 转换及对应规则 severity，输出由转换 ID 和意图种类确定的 firing/recovery 意图；它不读取告警表、不选择收件人，也不执行网络投递。持久化 outbox 提供显式批量上限的最旧优先读取与幂等确认；消费者必须先提交以意图 ID 去重的下游效果再确认，因此确认前崩溃只会形成可识别的重复交付。
+定期采集由 Host/Agent 调度器负责；历史聚合、告警评估与通知由 Server 内部受控工作队列执行。第一版可使用有界内存队列加持久化任务状态，不引入外部 Message Broker。跨域事件需定义幂等键和失败重放策略。当前通知域的纯规划器接收已验证的 Incident 转换及对应规则 severity，输出由转换 ID 和意图种类确定的 firing/recovery 意图；它不读取告警表、不选择收件人，也不执行网络投递。持久化 outbox 提供显式批量上限的最旧优先读取与幂等确认；消费者必须先提交以意图 ID 去重的下游效果再确认，因此确认前崩溃只会形成可识别的重复交付。通知 Processor 只执行一次有界批次并按意图隔离 Handler/确认失败，不创建 goroutine，也不决定周期与重试参数。
 
 ## 模块测试边界
 同域单测使用依赖注入；协议兼容测试验证 Protobuf、HTTP Schema；端到端测试用模拟插件和数据库测试实例，禁止以实际停用 N1 网络服务作为自动化测试手段。
