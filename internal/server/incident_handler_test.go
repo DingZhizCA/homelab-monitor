@@ -12,8 +12,21 @@ import (
 	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
+	"github.com/DingZhizCA/homelab-monitor/internal/audit"
 	"github.com/DingZhizCA/homelab-monitor/internal/auth"
 )
+
+type testIncidentActivationRepository struct {
+	actorID        string
+	deviceID       string
+	ruleID         string
+	targetRevision uint64
+}
+
+func (r *testIncidentActivationRepository) ActivateRuleRevisionWithAudit(_ context.Context, actorID, deviceID, ruleID string, targetRevision uint64, _ audit.Event) (alerts.IncidentActivationResult, error) {
+	r.actorID, r.deviceID, r.ruleID, r.targetRevision = actorID, deviceID, ruleID, targetRevision
+	return alerts.IncidentActivationResult{Ready: true}, nil
+}
 
 func TestIncidentRouteAllowsOwnerAndViewerDeviceReads(t *testing.T) {
 	fixture := newAuthTestFixture(t)
@@ -25,7 +38,12 @@ func TestIncidentRouteAllowsOwnerAndViewerDeviceReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewIncidentHandler(service, fixture.handler)
+	activationRepository := &testIncidentActivationRepository{}
+	activation, err := alerts.NewIncidentActivationService(activationRepository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewIncidentHandler(service, activation, fixture.handler, 4096)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +96,25 @@ func TestIncidentRouteAllowsOwnerAndViewerDeviceReads(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid query status=%d body=%s", response.Code, response.Body.String())
 	}
+
+	body := `{"device_id":"node/a","rule_id":"high-cpu","target_revision":2}`
+	request = authRequest(http.MethodPost, "https://monitor.example/api/v1/owner/alerts/incidents/activate", body)
+	request.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: viewerToken})
+	request.Header.Set("Origin", testAuthOrigin)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("Viewer activation status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = authRequest(http.MethodPost, "https://monitor.example/api/v1/owner/alerts/incidents/activate", body)
+	request.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: ownerToken})
+	request.Header.Set("Origin", testAuthOrigin)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || activationRepository.deviceID != "node/a" || activationRepository.ruleID != "high-cpu" || activationRepository.targetRevision != 2 || activationRepository.actorID != owner.ID {
+		t.Fatalf("Owner activation status=%d repository=%+v body=%s", response.Code, activationRepository, response.Body.String())
+	}
 }
 
 func TestRouterRejectsIncidentHandlerWithDifferentAuth(t *testing.T) {
@@ -91,7 +128,11 @@ func TestRouterRejectsIncidentHandlerWithDifferentAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewIncidentHandler(service, first.handler)
+	activation, err := alerts.NewIncidentActivationService(&testIncidentActivationRepository{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewIncidentHandler(service, activation, first.handler, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}

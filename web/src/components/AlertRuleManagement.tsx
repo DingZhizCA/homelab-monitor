@@ -7,7 +7,7 @@ import { History, PencilLine, Plus, RotateCcw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { MetricDescriptor } from '@/types'
+import type { IncidentState, MetricDescriptor } from '@/types'
 
 type Severity = 'critical' | 'warning' | 'info'
 type Operator = 'gt' | 'gte' | 'lt' | 'lte'
@@ -18,7 +18,7 @@ interface AlertRule { id: string; device_id: string; revision: number; severity:
 const emptyForm = () => ({ ruleID: '', severity: '' as Severity | '', enabled: '' as 'true' | 'false' | '', descriptorID: '', operator: '' as Operator | '', threshold: '', labels: {} as Record<string, string> })
 type RuleForm = ReturnType<typeof emptyForm>
 
-export function AlertRuleManagement({ deviceID }: { deviceID: string }) {
+export function AlertRuleManagement({ deviceID, incidents = [], onActivated }: { deviceID: string; incidents?: IncidentState[]; onActivated?: () => void }) {
   const [rules, setRules] = useState<AlertRule[]>([])
   const [descriptors, setDescriptors] = useState<MetricDescriptor[]>([])
   const [editingID, setEditingID] = useState<string | null>(null)
@@ -157,11 +157,26 @@ export function AlertRuleManagement({ deviceID }: { deviceID: string }) {
     } finally { setBusy(false) }
   }
 
+  async function activateRevision(rule: AlertRule, incident: IncidentState) {
+    setBusy(true)
+    setMessage('')
+    try {
+      await request('/api/v1/owner/alerts/incidents/activate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: deviceID, rule_id: rule.id, target_revision: rule.revision }),
+      })
+      setMessage(`规则 ${rule.id} Revision ${rule.revision} 已激活；旧 Revision ${incident.rule_revision} 已归档。`)
+      onActivated?.()
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : '无法激活规则 Revision。')
+    } finally { setBusy(false) }
+  }
+
   return <Card className="mt-5">
     <CardHeader className="flex-row items-center justify-between gap-3"><div><CardTitle className="text-base">规则管理</CardTitle><p className="mt-1 text-xs text-muted-foreground">Owner 可创建或修订单指标规则；复杂表达式保持只读。</p></div><Button type="button" size="sm" variant="outline" onClick={createRule}><Plus/>新建规则</Button></CardHeader>
     <CardContent className="grid gap-4">
       {message && <p role={message.startsWith('规则 ') ? 'status' : 'alert'} className="rounded-lg border p-3 text-sm text-muted-foreground">{message}</p>}
-      {loading ? <p role="status" className="text-sm text-muted-foreground">正在读取规则…</p> : rules.length === 0 ? <p className="text-sm text-muted-foreground">该设备还没有规则。</p> : <ul className="divide-y rounded-lg border">{rules.map(rule => <li key={rule.id} className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><b>{rule.id}</b><Badge variant="outline">Revision {rule.revision}</Badge><Badge variant="secondary">{severityLabel(rule.severity)}</Badge><span className="text-xs text-muted-foreground">{rule.enabled ? '已启用' : '已停用'}</span></div><p className="mt-1 break-words text-xs text-muted-foreground">{describeExpression(rule.expression)}</p></div><div className="flex items-center gap-2">{rule.expression.metric ? <Button type="button" size="sm" variant="outline" onClick={() => editRule(rule)}><PencilLine/>修订</Button> : <span className="text-xs text-muted-foreground">复杂表达式只读</span>}<Button type="button" size="sm" variant="outline" onClick={() => void toggleHistory(rule)}><History/>{historyRuleID === rule.id ? '收起历史' : '历史'}</Button></div></li>)}</ul>}
+      {loading ? <p role="status" className="text-sm text-muted-foreground">正在读取规则…</p> : rules.length === 0 ? <p className="text-sm text-muted-foreground">该设备还没有规则。</p> : <ul className="divide-y rounded-lg border">{rules.map(rule => { const incident = incidents.find(item => item.rule_id === rule.id); const needsActivation = incident && incident.rule_revision !== rule.revision; return <li key={rule.id} className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><b>{rule.id}</b><Badge variant="outline">Revision {rule.revision}</Badge><Badge variant="secondary">{severityLabel(rule.severity)}</Badge><span className="text-xs text-muted-foreground">{rule.enabled ? '已启用' : '已停用'}</span>{needsActivation && <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-300">等待激活</Badge>}</div><p className="mt-1 break-words text-xs text-muted-foreground">{describeExpression(rule.expression)}</p>{needsActivation && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">当前 Incident 属于 Revision {incident.rule_revision}，评估已暂停。</p>}</div><div className="flex flex-wrap items-center gap-2">{needsActivation && <Button type="button" size="sm" disabled={busy} onClick={() => void activateRevision(rule, incident)}>归档 Revision {incident.rule_revision} 并激活 Revision {rule.revision}</Button>}{rule.expression.metric ? <Button type="button" size="sm" variant="outline" onClick={() => editRule(rule)}><PencilLine/>修订</Button> : <span className="text-xs text-muted-foreground">复杂表达式只读</span>}<Button type="button" size="sm" variant="outline" onClick={() => void toggleHistory(rule)}><History/>{historyRuleID === rule.id ? '收起历史' : '历史'}</Button></div></li> })}</ul>}
       {historyRuleID && <div className="grid gap-3 rounded-lg border p-4"><h3 className="font-medium">{historyRuleID} 的不可变历史</h3>{historyMessage && <p role="alert" className="text-sm text-destructive">{historyMessage}</p>}{historyLoading ? <p role="status" className="text-sm text-muted-foreground">正在读取规则历史…</p> : revisions.length === 0 ? <p className="text-sm text-muted-foreground">暂无历史 Revision。</p> : <ul className="divide-y">{revisions.map(revision => { const current = rules.find(rule => rule.id === historyRuleID); return <li key={revision.revision} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><div><div className="flex items-center gap-2"><b>Revision {revision.revision}</b>{current?.revision === revision.revision && <Badge variant="secondary">当前</Badge>}<span className="text-xs text-muted-foreground">{severityLabel(revision.severity)} · {revision.enabled ? '已启用' : '已停用'}</span></div><p className="mt-1 break-words text-xs text-muted-foreground">{describeExpression(revision.expression)}</p></div>{current && current.revision !== revision.revision && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void rollback(current, revision)}><RotateCcw/>以 Revision {revision.revision} 创建 Revision {current.revision + 1}</Button>}</li> })}</ul>}</div>}
       {editingID !== null && <form onSubmit={event => void save(event)} className="grid gap-3 rounded-lg border p-4"><h3 className="font-medium">{editingID ? `修订 ${editingID}` : '新建单指标规则'}</h3><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         <label className="grid gap-1 text-sm">规则 ID<input aria-label="规则 ID" required disabled={editingID !== ''} value={form.ruleID} onChange={event => setForm(current => ({ ...current, ruleID: event.target.value }))} className="rounded-md border bg-background px-3 py-2"/></label>

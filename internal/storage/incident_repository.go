@@ -1,7 +1,7 @@
 /*
-Package storage persists current Incident transition state in core.db with an
-explicit row cap and timestamp compare-and-swap. It delegates all transition
-semantics to alerts.AdvanceIncident and does not create notification policy.
+Package storage persists current Incident transition state and superseded rule
+revision archives in core.db. Evaluation uses timestamp CAS; explicit Owner
+activation atomically archives and clears old current state with an audit event.
 */
 package storage
 
@@ -14,22 +14,102 @@ import (
 	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
+	"github.com/DingZhizCA/homelab-monitor/internal/audit"
 )
 
 // IncidentRepository stores bounded current Incident state in core.db.
 type IncidentRepository struct {
-	database   *sql.DB
-	maxEntries int
+	database          *sql.DB
+	maxEntries        int
+	maxArchiveEntries int
 }
 
 var _ alerts.IncidentRepository = (*IncidentRepository)(nil)
+var _ alerts.IncidentActivationRepository = (*IncidentRepository)(nil)
 
-// NewIncidentRepository requires an explicit maximum number of rule states.
-func NewIncidentRepository(database *sql.DB, maxEntries int) (*IncidentRepository, error) {
-	if database == nil || maxEntries < 1 {
-		return nil, errors.New("core database and positive Incident capacity are required")
+// NewIncidentRepository requires explicit current-state and archive capacities.
+func NewIncidentRepository(database *sql.DB, maxEntries, maxArchiveEntries int) (*IncidentRepository, error) {
+	if database == nil || maxEntries < 1 || maxArchiveEntries < 1 {
+		return nil, errors.New("core database and positive Incident current and archive capacities are required")
 	}
-	return &IncidentRepository{database: database, maxEntries: maxEntries}, nil
+	return &IncidentRepository{database: database, maxEntries: maxEntries, maxArchiveEntries: maxArchiveEntries}, nil
+}
+
+// ActivateRuleRevisionWithAudit archives an older current state and clears it atomically.
+func (r *IncidentRepository) ActivateRuleRevisionWithAudit(ctx context.Context, actorID, deviceID, ruleID string, targetRevision uint64, event audit.Event) (alerts.IncidentActivationResult, error) {
+	if err := validateIncidentIdentity(deviceID, ruleID); err != nil || targetRevision == 0 {
+		return alerts.IncidentActivationResult{}, alerts.ErrInvalidIncidentRequest
+	}
+	if err := validateIncidentActivationAudit(event, actorID, deviceID, ruleID); err != nil {
+		return alerts.IncidentActivationResult{}, err
+	}
+	transaction, err := r.database.BeginTx(ctx, nil)
+	if err != nil {
+		return alerts.IncidentActivationResult{}, fmt.Errorf("begin Incident activation: %w", err)
+	}
+	defer transaction.Rollback()
+	if err := requireActiveRuleOwner(ctx, transaction, actorID); err != nil {
+		return alerts.IncidentActivationResult{}, err
+	}
+	var currentRuleRevision uint64
+	err = transaction.QueryRowContext(ctx, `SELECT current_revision FROM alert_rules WHERE device_id = ? AND rule_id = ?`, deviceID, ruleID).Scan(&currentRuleRevision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return alerts.IncidentActivationResult{}, alerts.ErrIncidentRuleNotFound
+	}
+	if err != nil {
+		return alerts.IncidentActivationResult{}, fmt.Errorf("read current rule for Incident activation: %w", err)
+	}
+	if currentRuleRevision != targetRevision {
+		return alerts.IncidentActivationResult{}, alerts.ErrIncidentActivationConflict
+	}
+	var encoded []byte
+	err = transaction.QueryRowContext(ctx, `SELECT state_json FROM incident_states WHERE device_id = ? AND rule_id = ?`, deviceID, ruleID).Scan(&encoded)
+	if errors.Is(err, sql.ErrNoRows) {
+		return alerts.IncidentActivationResult{Ready: true}, transaction.Commit()
+	}
+	if err != nil {
+		return alerts.IncidentActivationResult{}, fmt.Errorf("read current Incident for activation: %w", err)
+	}
+	state, err := decodeIncidentState(encoded)
+	if err != nil {
+		return alerts.IncidentActivationResult{}, err
+	}
+	if state.RuleRevision == targetRevision {
+		return alerts.IncidentActivationResult{Ready: true}, transaction.Commit()
+	}
+	if state.RuleRevision > targetRevision {
+		return alerts.IncidentActivationResult{}, alerts.ErrIncidentActivationConflict
+	}
+	var archiveCount int
+	if err := transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM incident_revision_archives`).Scan(&archiveCount); err != nil {
+		return alerts.IncidentActivationResult{}, fmt.Errorf("count Incident archives: %w", err)
+	}
+	if archiveCount >= r.maxArchiveEntries {
+		return alerts.IncidentActivationResult{}, alerts.ErrIncidentArchiveCapacity
+	}
+	archive := alerts.IncidentArchive{State: state, Disposition: alerts.IncidentArchiveSuperseded, SupersededByRevision: targetRevision, SupersededAt: event.OccurredAt.UTC()}
+	archiveJSON, err := json.Marshal(archive)
+	if err != nil {
+		return alerts.IncidentActivationResult{}, fmt.Errorf("encode Incident archive: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, `INSERT INTO incident_revision_archives (device_id, rule_id, rule_revision, superseded_by_revision, superseded_at, archive_json) VALUES (?, ?, ?, ?, ?, ?)`, deviceID, ruleID, state.RuleRevision, targetRevision, storageTimestamp(archive.SupersededAt), archiveJSON); err != nil {
+		return alerts.IncidentActivationResult{}, fmt.Errorf("insert Incident archive: %w", err)
+	}
+	result, err := transaction.ExecContext(ctx, `DELETE FROM incident_states WHERE device_id = ? AND rule_id = ? AND rule_revision = ? AND last_evaluated_at = ?`, deviceID, ruleID, state.RuleRevision, storageTimestamp(state.LastEvaluatedAt))
+	if err != nil {
+		return alerts.IncidentActivationResult{}, fmt.Errorf("clear superseded Incident state: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil || changed != 1 {
+		return alerts.IncidentActivationResult{}, alerts.ErrIncidentActivationConflict
+	}
+	if err := insertAuditEvent(ctx, transaction, event); err != nil {
+		return alerts.IncidentActivationResult{}, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return alerts.IncidentActivationResult{}, fmt.Errorf("commit Incident activation: %w", err)
+	}
+	return alerts.IncidentActivationResult{Ready: true, Archived: &archive}, nil
 }
 
 func (r *IncidentRepository) Current(ctx context.Context, deviceID, ruleID string) (alerts.IncidentState, bool, error) {
@@ -161,4 +241,14 @@ func decodeIncidentState(encoded []byte) (alerts.IncidentState, error) {
 
 func validateIncidentIdentity(deviceID, ruleID string) error {
 	return alerts.ValidateIncidentIdentity(deviceID, ruleID)
+}
+
+func validateIncidentActivationAudit(event audit.Event, actorID, deviceID, ruleID string) error {
+	if err := event.Validate(); err != nil {
+		return fmt.Errorf("validate Incident activation audit event: %w", err)
+	}
+	if event.ActorID != actorID || event.Action != alerts.IncidentSupersedeAuditAction || event.ResourceType != alerts.IncidentAuditResourceType || event.ResourceID != alerts.IncidentAuditResourceID(deviceID, ruleID) {
+		return errors.New("Incident activation audit event does not match mutation")
+	}
+	return nil
 }

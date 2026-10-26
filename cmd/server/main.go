@@ -125,6 +125,7 @@ func run() error {
 	alertEvaluationTimeout := flag.Duration("alert-evaluation-timeout", 0, "timeout for one alert evaluation run")
 	alertEvaluationMaxRules := flag.Int("alert-evaluation-max-rules", 0, "maximum rules evaluated in one run")
 	incidentMaxStates := flag.Int("incident-max-states", 0, "maximum current Incident states retained")
+	incidentMaxArchives := flag.Int("incident-history-max-records", 0, "maximum superseded Incident revisions retained")
 	var incidentPendingFor, incidentRecoveryFor explicitDurationFlag
 	flag.Var(&incidentPendingFor, "incident-pending-for", "continuous true duration before firing; explicitly set 0s for immediate")
 	flag.Var(&incidentRecoveryFor, "incident-recovery-for", "continuous false duration before resolving; explicitly set 0s for immediate")
@@ -316,7 +317,7 @@ func run() error {
 		maxBodyBytes: *alertRuleMaxBodyBytes, maxDepth: *alertRuleMaxDepth, maxConditions: *alertRuleMaxConditions,
 	}, alertEvaluationRuntimeConfig{
 		enabled: *alertEvaluationEnabled, interval: *alertEvaluationInterval, timeout: *alertEvaluationTimeout,
-		maxRulesPerRun: *alertEvaluationMaxRules, maxIncidentStates: *incidentMaxStates,
+		maxRulesPerRun: *alertEvaluationMaxRules, maxIncidentStates: *incidentMaxStates, maxIncidentArchives: *incidentMaxArchives,
 		pendingFor: incidentPendingFor.pointer(), recoveryFor: incidentRecoveryFor.pointer(),
 		unknownBehavior: alerts.UncertainBehavior(*incidentUnknownBehavior), disabledBehavior: alerts.UncertainBehavior(*incidentDisabledBehavior),
 	})

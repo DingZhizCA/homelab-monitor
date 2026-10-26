@@ -87,4 +87,23 @@ describe('AlertRuleManagement', () => {
     expect(await screen.findByText('规则 combined 已将 Revision 1 重新发布为 Revision 4。')).toBeInTheDocument()
     expect(rollbackBody).toEqual({ device_id: 'node-a', rule_id: 'combined', target_revision: 1, new_revision: 4, expected_current: 3 })
   })
+
+  it('requires an explicit activation when current Incident belongs to an older revision', async () => {
+  let activationBody: unknown
+  const activated = vi.fn()
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const path = String(input)
+    if (path.startsWith('/api/v1/owner/alert-rules?')) return { ok: true, status: 200, json: async () => ({ rules: [{ id: 'high-cpu', device_id: 'node-a', revision: 2, severity: 'warning', enabled: true, expression: { metric: { descriptor_id: 'cpu.usage_percent', operator: 'gt', threshold: 90, unit: 'percent' } } }] }) }
+    if (path === '/api/v1/dashboard/metrics/descriptors') return { ok: true, status: 200, json: async () => ({ descriptors: [] }) }
+    if (path === '/api/v1/owner/alerts/incidents/activate' && init.method === 'POST') { activationBody = JSON.parse(String(init.body)); return { ok: true, status: 204 } }
+    throw new Error(`unexpected request ${path}`)
+  }))
+  render(<AlertRuleManagement deviceID="node-a" incidents={[{ device_id: 'node-a', rule_id: 'high-cpu', rule_revision: 1, status: 'firing', last_evaluated_at: '2026-10-26T08:00:00Z', last_evaluation: 'true' }]} onActivated={activated}/>)
+  const button = await screen.findByRole('button', { name: '归档 Revision 1 并激活 Revision 2' })
+  expect(screen.getByText('当前 Incident 属于 Revision 1，评估已暂停。')).toBeInTheDocument()
+  fireEvent.click(button)
+  expect(await screen.findByText('规则 high-cpu Revision 2 已激活；旧 Revision 1 已归档。')).toBeInTheDocument()
+  expect(activationBody).toEqual({ device_id: 'node-a', rule_id: 'high-cpu', target_revision: 2 })
+  expect(activated).toHaveBeenCalledOnce()
+  })
 })

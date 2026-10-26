@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
+	"github.com/DingZhizCA/homelab-monitor/internal/audit"
+	"github.com/DingZhizCA/homelab-monitor/internal/auth"
+	"github.com/DingZhizCA/homelab-monitor/internal/dashboard"
 	"github.com/DingZhizCA/homelab-monitor/internal/testutil"
 )
 
@@ -22,7 +25,7 @@ func TestIncidentRepositoryPersistsTransitionsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repository, err := NewIncidentRepository(databases.Core, 2)
+	repository, err := NewIncidentRepository(databases.Core, 2, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +48,7 @@ func TestIncidentRepositoryPersistsTransitionsAcrossReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = databases.Close() })
-	repository, err = NewIncidentRepository(databases.Core, 2)
+	repository, err = NewIncidentRepository(databases.Core, 2, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,9 +62,83 @@ func TestIncidentRepositoryPersistsTransitionsAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestIncidentRepositoryExplicitlyArchivesAndActivatesNewRuleRevision(t *testing.T) {
+	databases := openTestDatabases(t)
+	ownerID := insertDashboardTestUser(t, databases, "incident-owner", auth.RoleOwner)
+	rules, err := NewAlertRuleRepository(databases.Core, dashboard.NewMetricRegistry(), alerts.Limits{MaxDepth: 4, MaxConditions: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1 := storedIncidentRule(1)
+	if err := rules.SaveRevisionWithAudit(context.Background(), ownerID, v1, 0, storedRuleAudit(t, ownerID, alerts.RuleAuditAction, v1)); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := NewIncidentRepository(databases.Core, 2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 26, 8, 0, 0, 0, time.UTC)
+	if _, err := repository.Advance(context.Background(), v1, storedIncidentResult(1, alerts.StateTrue), at, storedIncidentPolicy(), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	v2 := storedRule(2, 90)
+	if err := rules.SaveRevisionWithAudit(context.Background(), ownerID, v2, 1, storedRuleAudit(t, ownerID, alerts.RuleAuditAction, v2)); err != nil {
+		t.Fatal(err)
+	}
+	event, err := audit.NewEvent(at.Add(time.Minute), ownerID, alerts.IncidentSupersedeAuditAction, alerts.IncidentAuditResourceType, alerts.IncidentAuditResourceID(v1.DeviceID, v1.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := repository.ActivateRuleRevisionWithAudit(context.Background(), ownerID, v1.DeviceID, v1.ID, 2, event)
+	if err != nil || !result.Ready || result.Archived == nil || result.Archived.Disposition != alerts.IncidentArchiveSuperseded || result.Archived.State.RuleRevision != 1 || result.Archived.SupersededByRevision != 2 {
+		t.Fatalf("activation result=%+v err=%v", result, err)
+	}
+	if _, found, err := repository.Current(context.Background(), v1.DeviceID, v1.ID); err != nil || found {
+		t.Fatalf("current after activation found=%t err=%v", found, err)
+	}
+	var archives, activationEvents int
+	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM incident_revision_archives`).Scan(&archives); err != nil || archives != 1 {
+		t.Fatalf("archives=%d err=%v", archives, err)
+	}
+	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action = ?`, alerts.IncidentSupersedeAuditAction).Scan(&activationEvents); err != nil || activationEvents != 1 {
+		t.Fatalf("activation events=%d err=%v", activationEvents, err)
+	}
+	retry, err := repository.ActivateRuleRevisionWithAudit(context.Background(), ownerID, v1.DeviceID, v1.ID, 2, event)
+	if err != nil || !retry.Ready || retry.Archived != nil {
+		t.Fatalf("idempotent activation=%+v err=%v", retry, err)
+	}
+	if _, err := repository.Advance(context.Background(), v2, storedIncidentResult(2, alerts.StateTrue), at.Add(2*time.Minute), storedIncidentPolicy(), time.Time{}); err != nil {
+		t.Fatalf("new revision did not start cleanly: %v", err)
+	}
+	otherV1 := storedRule(1, 70)
+	otherV1.ID = "high-memory"
+	if err := rules.SaveRevisionWithAudit(context.Background(), ownerID, otherV1, 0, storedRuleAudit(t, ownerID, alerts.RuleAuditAction, otherV1)); err != nil {
+		t.Fatal(err)
+	}
+	otherResult := alerts.EvaluationResult{RuleID: otherV1.ID, Revision: 1, State: alerts.StateTrue}
+	if _, err := repository.Advance(context.Background(), otherV1, otherResult, at, storedIncidentPolicy(), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	otherV2 := otherV1
+	otherV2.Revision = 2
+	if err := rules.SaveRevisionWithAudit(context.Background(), ownerID, otherV2, 1, storedRuleAudit(t, ownerID, alerts.RuleAuditAction, otherV2)); err != nil {
+		t.Fatal(err)
+	}
+	otherEvent, err := audit.NewEvent(at.Add(3*time.Minute), ownerID, alerts.IncidentSupersedeAuditAction, alerts.IncidentAuditResourceType, alerts.IncidentAuditResourceID(otherV1.DeviceID, otherV1.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ActivateRuleRevisionWithAudit(context.Background(), ownerID, otherV1.DeviceID, otherV1.ID, 2, otherEvent); !errors.Is(err, alerts.ErrIncidentArchiveCapacity) {
+		t.Fatalf("archive capacity error=%v", err)
+	}
+	if current, found, err := repository.Current(context.Background(), otherV1.DeviceID, otherV1.ID); err != nil || !found || current.RuleRevision != 1 {
+		t.Fatalf("capacity failure changed current=%+v found=%t err=%v", current, found, err)
+	}
+}
+
 func TestIncidentRepositoryEnforcesCASCapacityAndRevisionIsolation(t *testing.T) {
 	databases := openTestDatabases(t)
-	repository, err := NewIncidentRepository(databases.Core, 1)
+	repository, err := NewIncidentRepository(databases.Core, 1, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

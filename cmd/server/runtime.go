@@ -174,15 +174,16 @@ func (c alertRuleRuntimeConfig) disabled() bool {
 }
 
 type alertEvaluationRuntimeConfig struct {
-	enabled           bool
-	interval          time.Duration
-	timeout           time.Duration
-	maxRulesPerRun    int
-	maxIncidentStates int
-	pendingFor        *time.Duration
-	recoveryFor       *time.Duration
-	unknownBehavior   alerts.UncertainBehavior
-	disabledBehavior  alerts.UncertainBehavior
+	enabled             bool
+	interval            time.Duration
+	timeout             time.Duration
+	maxRulesPerRun      int
+	maxIncidentStates   int
+	maxIncidentArchives int
+	pendingFor          *time.Duration
+	recoveryFor         *time.Duration
+	unknownBehavior     alerts.UncertainBehavior
+	disabledBehavior    alerts.UncertainBehavior
 }
 
 type alertEvaluationRuntime struct {
@@ -191,7 +192,7 @@ type alertEvaluationRuntime struct {
 }
 
 func (c alertEvaluationRuntimeConfig) disabled() bool {
-	return !c.enabled && c.interval == 0 && c.timeout == 0 && c.maxRulesPerRun == 0 && c.maxIncidentStates == 0 && c.pendingFor == nil && c.recoveryFor == nil && c.unknownBehavior == "" && c.disabledBehavior == ""
+	return !c.enabled && c.interval == 0 && c.timeout == 0 && c.maxRulesPerRun == 0 && c.maxIncidentStates == 0 && c.maxIncidentArchives == 0 && c.pendingFor == nil && c.recoveryFor == nil && c.unknownBehavior == "" && c.disabledBehavior == ""
 }
 
 type pluginRuntimeConfig struct {
@@ -600,15 +601,15 @@ func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRu
 	if config.disabled() {
 		return nil, nil
 	}
-	if !config.enabled || databases == nil || humanAuth == nil || humanAuth.registry == nil || snapshots == nil || ruleConfig.maxDepth < 1 || ruleConfig.maxConditions < 1 || config.interval <= 0 || config.timeout <= 0 || config.maxRulesPerRun < 1 || config.maxIncidentStates < 1 || config.pendingFor == nil || config.recoveryFor == nil || config.unknownBehavior == "" || config.disabledBehavior == "" {
-		return nil, errors.New("enabled alert evaluation requires storage, current snapshots, alert-rule limits, and explicit positive scheduling limits and Incident policy")
+	if !config.enabled || databases == nil || humanAuth == nil || humanAuth.handler == nil || humanAuth.registry == nil || snapshots == nil || ruleConfig.maxBodyBytes < 1 || ruleConfig.maxDepth < 1 || ruleConfig.maxConditions < 1 || config.interval <= 0 || config.timeout <= 0 || config.maxRulesPerRun < 1 || config.maxIncidentStates < 1 || config.maxIncidentArchives < 1 || config.pendingFor == nil || config.recoveryFor == nil || config.unknownBehavior == "" || config.disabledBehavior == "" {
+		return nil, errors.New("enabled alert evaluation requires storage, authentication, current snapshots, alert-rule limits, positive scheduling and Incident capacities, and explicit Incident policy")
 	}
 	limits := alerts.Limits{MaxDepth: ruleConfig.maxDepth, MaxConditions: ruleConfig.maxConditions}
 	rules, err := storage.NewAlertRuleRepository(databases.Core, humanAuth.registry, limits)
 	if err != nil {
 		return nil, err
 	}
-	incidents, err := storage.NewIncidentRepository(databases.Core, config.maxIncidentStates)
+	incidents, err := storage.NewIncidentRepository(databases.Core, config.maxIncidentStates, config.maxIncidentArchives)
 	if err != nil {
 		return nil, err
 	}
@@ -631,7 +632,11 @@ func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRu
 	if err != nil {
 		return nil, err
 	}
-	handler, err := server.NewIncidentHandler(service, humanAuth.handler)
+	activation, err := alerts.NewIncidentActivationService(incidents)
+	if err != nil {
+		return nil, err
+	}
+	handler, err := server.NewIncidentHandler(service, activation, humanAuth.handler, ruleConfig.maxBodyBytes)
 	if err != nil {
 		return nil, err
 	}

@@ -321,7 +321,7 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	alertEvaluation, err := buildAlertEvaluationRuntime(databases, humanAuth, store,
 		alertRuleRuntimeConfig{maxBodyBytes: 1 << 20, maxDepth: 4, maxConditions: 8},
 		alertEvaluationRuntimeConfig{
-			enabled: true, interval: time.Hour, timeout: time.Second, maxRulesPerRun: 10, maxIncidentStates: 10,
+			enabled: true, interval: time.Hour, timeout: time.Second, maxRulesPerRun: 10, maxIncidentStates: 10, maxIncidentArchives: 20,
 			pendingFor: &zero, recoveryFor: &zero, unknownBehavior: alerts.UncertainHold, disabledBehavior: alerts.UncertainHold,
 		})
 	if err != nil {
@@ -456,6 +456,32 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"rule_id":"high-cpu"`) {
 		t.Fatalf("Incident query status=%d body=%s", response.Code, response.Body.String())
+	}
+	request = authenticatedMutationRequest(http.MethodPut, "/api/v1/owner/alert-rules", `{"expected_current":1,"rule":{"id":"high-cpu","device_id":"node-a","revision":2,"severity":"warning","enabled":true,"expression":{"metric":{"descriptor_id":"cpu.usage_percent","operator":"gt","threshold":90,"unit":"percent"}}}}`)
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("alert-rule revision save status=%d body=%s", response.Code, response.Body.String())
+	}
+	blockedSummary := alertEvaluation.engine.RunOnce(context.Background())
+	if blockedSummary.Failed != 1 {
+		t.Fatalf("revision mismatch did not block evaluation: %+v", blockedSummary)
+	}
+	request = authenticatedMutationRequest(http.MethodPost, "/api/v1/owner/alerts/incidents/activate", `{"device_id":"node-a","rule_id":"high-cpu","target_revision":2}`)
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ready":true`) || !strings.Contains(response.Body.String(), `"superseded_by_revision":2`) {
+		t.Fatalf("Incident activation status=%d body=%s", response.Code, response.Body.String())
+	}
+	activatedSummary := alertEvaluation.engine.RunOnce(context.Background())
+	if activatedSummary.Succeeded != 1 || activatedSummary.Failed != 0 {
+		t.Fatalf("activated revision evaluation summary=%+v", activatedSummary)
+	}
+	var activatedRevision uint64
+	if err := databases.Core.QueryRow(`SELECT rule_revision FROM incident_states WHERE device_id = ? AND rule_id = ?`, "node-a", "high-cpu").Scan(&activatedRevision); err != nil || activatedRevision != 2 {
+		t.Fatalf("activated Incident revision=%d err=%v", activatedRevision, err)
 	}
 
 	for _, path := range []string{
