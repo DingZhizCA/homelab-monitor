@@ -106,6 +106,9 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if engine, err := buildAlertEvaluationRuntime(nil, nil, nil, alertRuleRuntimeConfig{}, alertEvaluationRuntimeConfig{enabled: true}); err == nil || engine != nil {
 		t.Fatalf("partial alert engine=%v err=%v", engine, err)
 	}
+	if engine, err := buildAlertEvaluationRuntime(nil, nil, nil, alertRuleRuntimeConfig{}, alertEvaluationRuntimeConfig{archiveRetention: time.Hour}); err == nil || engine != nil {
+		t.Fatalf("archive retention without alert evaluation engine=%v err=%v", engine, err)
+	}
 	if runtime, err := buildPluginRuntime(nil, nil, nil, pluginRuntimeConfig{artifactDirectory: "/private/plugins"}); err == nil || runtime != nil {
 		t.Fatalf("partial plugin runtime=%v err=%v", runtime, err)
 	}
@@ -318,14 +321,27 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	zero := time.Duration(0)
+	partialArchivePolicy := alertEvaluationRuntimeConfig{
+		enabled: true, interval: time.Hour, timeout: time.Second, maxRulesPerRun: 10, maxIncidentStates: 10, maxIncidentArchives: 20,
+		archiveRetention: 24 * time.Hour,
+		pendingFor:       &zero, recoveryFor: &zero, unknownBehavior: alerts.UncertainHold, disabledBehavior: alerts.UncertainHold,
+	}
+	if runtime, err := buildAlertEvaluationRuntime(databases, humanAuth, store,
+		alertRuleRuntimeConfig{maxBodyBytes: 1 << 20, maxDepth: 4, maxConditions: 8}, partialArchivePolicy); err == nil || runtime != nil {
+		t.Fatalf("partial Incident archive retention runtime=%v err=%v", runtime, err)
+	}
 	alertEvaluation, err := buildAlertEvaluationRuntime(databases, humanAuth, store,
 		alertRuleRuntimeConfig{maxBodyBytes: 1 << 20, maxDepth: 4, maxConditions: 8},
 		alertEvaluationRuntimeConfig{
 			enabled: true, interval: time.Hour, timeout: time.Second, maxRulesPerRun: 10, maxIncidentStates: 10, maxIncidentArchives: 20,
+			archiveCleanupInterval: time.Hour, archiveRetention: 24 * time.Hour, archiveCleanupLimit: 2, archiveCleanupTimeout: time.Second,
 			pendingFor: &zero, recoveryFor: &zero, unknownBehavior: alerts.UncertainHold, disabledBehavior: alerts.UncertainHold,
 		})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if alertEvaluation.archiveRetention == nil {
+		t.Fatal("configured Incident archive retention was not assembled")
 	}
 	artifactDirectory := filepath.Join(testutil.TempDir(t), "artifacts")
 	if err := os.Mkdir(artifactDirectory, 0o700); err != nil {

@@ -164,6 +164,12 @@ var coreMigrations = []Migration{
 	CREATE INDEX incident_archives_device_rule
 		ON incident_revision_archives (device_id, rule_id, rule_revision DESC);`,
 	},
+	{
+		Version: 8,
+		Name:    "incident_archive_retention_index",
+		SQL: `CREATE INDEX incident_archives_superseded_at
+		ON incident_revision_archives (superseded_at, device_id, rule_id, rule_revision);`,
+	},
 }
 
 // AuthRepository implements the auth user and session persistence boundaries.
