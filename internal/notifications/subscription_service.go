@@ -36,11 +36,14 @@ func NewSubscriptionService(repository SubscriptionRepository, rules Subscriptio
 	return &SubscriptionService{repository: repository, rules: rules, now: now}, nil
 }
 
-func (s *SubscriptionService) List(ctx context.Context, actor auth.Principal, limit int) ([]Subscription, error) {
+func (s *SubscriptionService) List(ctx context.Context, actor auth.Principal, deviceID string, limit int) ([]Subscription, error) {
 	if err := authorizeSubscriptionUser(ctx, actor); err != nil {
 		return nil, err
 	}
-	return s.repository.ListForUser(ctx, actor.UserID, limit)
+	if err := alerts.ValidateIncidentDeviceID(deviceID); err != nil {
+		return nil, ErrInvalidSubscription
+	}
+	return s.repository.ListForUser(ctx, actor.UserID, deviceID, limit)
 }
 
 func (s *SubscriptionService) Save(ctx context.Context, actor auth.Principal, subscription Subscription, expectedRevision uint64) error {

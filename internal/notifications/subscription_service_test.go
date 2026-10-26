@@ -43,26 +43,27 @@ func TestSubscriptionServiceListsOnlySessionUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listed, err := service.List(context.Background(), auth.Principal{UserID: "owner-a", Role: auth.RoleOwner}, 4)
-	if err != nil || repository.listedUser != "owner-a" || repository.listedLimit != 4 || len(listed) != 1 {
-		t.Fatalf("listed=%+v user=%q limit=%d err=%v", listed, repository.listedUser, repository.listedLimit, err)
+	listed, err := service.List(context.Background(), auth.Principal{UserID: "owner-a", Role: auth.RoleOwner}, "node-a", 4)
+	if err != nil || repository.listedUser != "owner-a" || repository.listedDevice != "node-a" || repository.listedLimit != 4 || len(listed) != 1 {
+		t.Fatalf("listed=%+v user=%q device=%q limit=%d err=%v", listed, repository.listedUser, repository.listedDevice, repository.listedLimit, err)
 	}
-	if _, err := service.List(context.Background(), auth.Principal{}, 4); !errors.Is(err, auth.ErrForbidden) {
+	if _, err := service.List(context.Background(), auth.Principal{}, "node-a", 4); !errors.Is(err, auth.ErrForbidden) {
 		t.Fatalf("unauthorized list error=%v", err)
 	}
 }
 
 type subscriptionServiceRepository struct {
-	listed      []Subscription
-	listedUser  string
-	listedLimit int
-	actorID     string
-	saved       Subscription
-	event       audit.Event
+	listed       []Subscription
+	listedUser   string
+	listedDevice string
+	listedLimit  int
+	actorID      string
+	saved        Subscription
+	event        audit.Event
 }
 
-func (r *subscriptionServiceRepository) ListForUser(_ context.Context, userID string, limit int) ([]Subscription, error) {
-	r.listedUser, r.listedLimit = userID, limit
+func (r *subscriptionServiceRepository) ListForUser(_ context.Context, userID, deviceID string, limit int) ([]Subscription, error) {
+	r.listedUser, r.listedDevice, r.listedLimit = userID, deviceID, limit
 	return append([]Subscription(nil), r.listed...), nil
 }
 

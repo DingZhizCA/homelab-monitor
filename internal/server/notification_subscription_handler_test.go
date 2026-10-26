@@ -41,7 +41,7 @@ func TestNotificationSubscriptionRouteUsesSessionIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := authRequest(http.MethodGet, "https://monitor.example/api/v1/notifications/subscriptions?limit=4", "")
+	request := authRequest(http.MethodGet, "https://monitor.example/api/v1/notifications/subscriptions?device_id=node-a&limit=4", "")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
@@ -61,7 +61,7 @@ func TestNotificationSubscriptionRouteUsesSessionIdentity(t *testing.T) {
 	}
 
 	repository.listed = []notifications.Subscription{repository.saved}
-	request = authRequest(http.MethodGet, "https://monitor.example/api/v1/notifications/subscriptions?limit=4", "")
+	request = authRequest(http.MethodGet, "https://monitor.example/api/v1/notifications/subscriptions?device_id=node-a&limit=4", "")
 	request.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: token})
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -76,7 +76,7 @@ type notificationSubscriptionHTTPRepository struct {
 	listed  []notifications.Subscription
 }
 
-func (r *notificationSubscriptionHTTPRepository) ListForUser(context.Context, string, int) ([]notifications.Subscription, error) {
+func (r *notificationSubscriptionHTTPRepository) ListForUser(context.Context, string, string, int) ([]notifications.Subscription, error) {
 	return append([]notifications.Subscription(nil), r.listed...), nil
 }
 

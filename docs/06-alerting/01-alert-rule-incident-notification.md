@@ -1,6 +1,6 @@
 # 告警引擎、规则版本与通知架构
 
-> **文档状态**：规则、Incident 持久化、有界评估、历史查询、显式订阅仓储与可选自助 API 运行链、通知意图规划、原子 outbox 与单轮 Processor 已实现；消费调度与实际下游待实施
+> **文档状态**：规则、Incident 持久化、有界评估、历史查询、显式订阅仓储、自助 API 与 Web 管理、通知意图规划、原子 outbox 和单轮 Processor 已实现；消费调度与实际下游待实施
 > **整理依据**：用户历轮确认 + “未单独确认项按推荐方案生成”的授权
 > **说明**：技术参数的具体默认数值需要在模块实施时验证；本文不构成现网变更指令。
 
@@ -26,10 +26,10 @@
 复用 Server 已接收的当前快照和既有指标存储，不反向触发采集。当前调度器只从内存 Current State 提取内建 Descriptor，按快照在线状态把值标记为 Fresh 或 Stale，并将缺失值保留为 Missing；它不会请求 Agent、创建采集任务或改变设备采样周期。Incident 按明确依赖关系组合异常，关联不是无证据自动宣布根因。
 
 ## 通知（已确认）
-Web 站内通知 + iPhone/桌面 Web Push；系统没有隐式收件人，用户必须通过精确订阅选择设备、规则、单一级别及站内和/或 Push 渠道。Critical/Warning 可选择 Push，Warning 后续受免打扰控制，Info 只能选择站内记录。当前纯规划器把已验证的不可变 Incident 转换和对应 Rule Revision 的 severity 转换为确定性意图：首次进入 Firing 生成 firing，已经 Firing 或 Recovering 后进入 Resolved 生成 recovery；Pending 等中间变化及 Recovering 回到 Firing 不产生通知。Critical/Warning 意图标记为 `push_eligible`，Info 标记为 `record_only`；ID 由转换 ID 与种类确定，重算不会产生新身份。severity 由推进该转换的规则快照显式传入，不改变已有转换事件协议。通知调度器后续在 Alienware 上运行；精确订阅、有界收件人规划及 SQLite 当前订阅仓储已实现；自助订阅服务和 HTTP 路由可由 `cmd/server` 在完整显式配置下装配；分组、静默、有限重试和实际投递尚未接入。Web Push 需 PWA/HTTPS/用户授权与外部推送服务；Server 整机停机或外网故障不承诺送达。
+Web 站内通知 + iPhone/桌面 Web Push；系统没有隐式收件人，用户必须通过精确订阅选择设备、规则、单一级别及站内和/或 Push 渠道。Critical/Warning 可选择 Push，Warning 后续受免打扰控制，Info 只能选择站内记录。当前纯规划器把已验证的不可变 Incident 转换和对应 Rule Revision 的 severity 转换为确定性意图：首次进入 Firing 生成 firing，已经 Firing 或 Recovering 后进入 Resolved 生成 recovery；Pending 等中间变化及 Recovering 回到 Firing 不产生通知。Critical/Warning 意图标记为 `push_eligible`，Info 标记为 `record_only`；ID 由转换 ID 与种类确定，重算不会产生新身份。severity 由推进该转换的规则快照显式传入，不改变已有转换事件协议。通知调度器后续在 Alienware 上运行；精确订阅、有界收件人规划及 SQLite 当前订阅仓储已实现；自助订阅服务和 HTTP 路由可由 `cmd/server` 在完整显式配置下装配；Alerts 页面由用户填写设备范围内的条数上限后手动读取，并明确新建或修订精确订阅。分组、静默、有限重试和实际投递尚未接入。Web Push 需 PWA/HTTPS/用户授权与外部推送服务；Server 整机停机或外网故障不承诺送达。
 
 ## 权限与安全
-Owner 可以管理规则和告警版本；Owner 与 Viewer 可通过 HTTPS Session 按一个明确设备读取当前 Incident 转换状态。当前查询没有更细粒度设备 ACL，也不包含历史、确认、静默或通知偏好；Viewer 不能改规则。Push Payload 最小化，不包含凭据和敏感网址；点击通知需正常 Session 权限验证。
+Owner 可以管理规则和告警版本；Owner 与 Viewer 可通过 HTTPS Session 按一个明确设备读取当前 Incident 转换状态及自己的精确订阅。订阅列表请求必须同时给出唯一 `device_id` 和正整数 `limit`，避免跨设备截断。当前查询没有更细粒度设备 ACL，也不包含历史、确认、静默或通知偏好；Viewer 不能改规则。Push Payload 最小化，不包含凭据和敏感网址；点击通知需正常 Session 权限验证。
 
 ## 验收架构
 使用模拟时钟和指标回放验证 AND/OR Unknown、规则重启、版本回滚、持久化 Incident、重复通知抑制、性能有界、通知失败隔离。禁止为了自动化验收主动停止 N1 的真实代理或路由服务。

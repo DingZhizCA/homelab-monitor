@@ -50,9 +50,10 @@ func (h *NotificationSubscriptionHandler) Collection(w http.ResponseWriter, r *h
 
 func (h *NotificationSubscriptionHandler) list(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 	query := r.URL.Query()
+	deviceIDs, hasDevice := query["device_id"]
 	limits, exists := query["limit"]
-	if !exists || len(limits) != 1 || len(query) != 1 {
-		writeError(w, http.StatusBadRequest, "INVALID_NOTIFICATION_SUBSCRIPTION", "one bounded limit is required")
+	if !hasDevice || !exists || len(deviceIDs) != 1 || len(limits) != 1 || len(query) != 2 {
+		writeError(w, http.StatusBadRequest, "INVALID_NOTIFICATION_SUBSCRIPTION", "one device_id and bounded limit are required")
 		return
 	}
 	limit, err := strconv.Atoi(limits[0])
@@ -60,7 +61,7 @@ func (h *NotificationSubscriptionHandler) list(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "INVALID_NOTIFICATION_SUBSCRIPTION", "limit must be a positive bounded integer")
 		return
 	}
-	subscriptions, err := h.service.List(r.Context(), principal, limit)
+	subscriptions, err := h.service.List(r.Context(), principal, deviceIDs[0], limit)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return

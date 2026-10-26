@@ -31,7 +31,7 @@ func TestNotificationSubscriptionRepositoryPersistsCASAuditAndMatchesActiveUser(
 	if err := repository.SaveWithAudit(context.Background(), userID, subscription, 0, event); err != nil {
 		t.Fatalf("idempotent save: %v", err)
 	}
-	listed, err := repository.ListForUser(context.Background(), userID, 2)
+	listed, err := repository.ListForUser(context.Background(), userID, "node-a", 2)
 	if err != nil || len(listed) != 1 || listed[0] != subscription {
 		t.Fatalf("listed=%+v err=%v", listed, err)
 	}

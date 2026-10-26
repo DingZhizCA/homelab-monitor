@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
 	"github.com/DingZhizCA/homelab-monitor/internal/audit"
 	"github.com/DingZhizCA/homelab-monitor/internal/notifications"
 )
@@ -36,11 +37,11 @@ func NewNotificationSubscriptionRepository(database *sql.DB, maxEntries, maxPerU
 	return &NotificationSubscriptionRepository{database: database, maxEntries: maxEntries, maxPerUser: maxPerUser, maxRecipients: maxRecipients}, nil
 }
 
-func (r *NotificationSubscriptionRepository) ListForUser(ctx context.Context, userID string, limit int) ([]notifications.Subscription, error) {
-	if strings.TrimSpace(userID) == "" || strings.TrimSpace(userID) != userID || limit < 1 || limit > r.maxPerUser {
+func (r *NotificationSubscriptionRepository) ListForUser(ctx context.Context, userID, deviceID string, limit int) ([]notifications.Subscription, error) {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(userID) != userID || alerts.ValidateIncidentDeviceID(deviceID) != nil || limit < 1 || limit > r.maxPerUser {
 		return nil, notifications.ErrInvalidSubscription
 	}
-	rows, err := r.database.QueryContext(ctx, `SELECT subscription_json FROM notification_subscriptions WHERE user_id = ? ORDER BY device_id, rule_id, severity LIMIT ?`, userID, limit)
+	rows, err := r.database.QueryContext(ctx, `SELECT subscription_json FROM notification_subscriptions WHERE user_id = ? AND device_id = ? ORDER BY rule_id, severity LIMIT ?`, userID, deviceID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list notification subscriptions: %w", err)
 	}
@@ -52,7 +53,7 @@ func (r *NotificationSubscriptionRepository) ListForUser(ctx context.Context, us
 			return nil, fmt.Errorf("scan notification subscription: %w", err)
 		}
 		subscription, err := decodeNotificationSubscription(encoded)
-		if err != nil || subscription.UserID != userID {
+		if err != nil || subscription.UserID != userID || subscription.DeviceID != deviceID {
 			return nil, errors.New("stored notification subscription is invalid")
 		}
 		result = append(result, subscription)

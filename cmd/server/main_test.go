@@ -477,7 +477,7 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("notification subscription save status=%d body=%s", response.Code, response.Body.String())
 	}
-	request = httptest.NewRequest(http.MethodGet, "https://monitor.example/api/v1/notifications/subscriptions?limit=8", nil)
+	request = httptest.NewRequest(http.MethodGet, "https://monitor.example/api/v1/notifications/subscriptions?device_id=node-a&limit=8", nil)
 	request.AddCookie(cookies[0])
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)

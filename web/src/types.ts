@@ -185,6 +185,17 @@ export interface IncidentTransition {
   state: IncidentState
 }
 
+/** Current exact notification preference owned by the authenticated user. */
+export interface NotificationSubscription {
+  user_id: string
+  device_id: string
+  rule_id: string
+  severity: 'critical' | 'warning' | 'info'
+  revision: number
+  enabled: boolean
+  channels: { in_app: boolean; push: boolean }
+}
+
 /** Lifecycle state for one explicitly authorized disk-capacity refresh. */
 export interface RefreshJob {
   request_id: string

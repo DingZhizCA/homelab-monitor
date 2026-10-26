@@ -49,7 +49,7 @@ type Recipient struct {
 }
 
 type SubscriptionRepository interface {
-	ListForUser(ctx context.Context, userID string, limit int) ([]Subscription, error)
+	ListForUser(ctx context.Context, userID, deviceID string, limit int) ([]Subscription, error)
 	SaveWithAudit(ctx context.Context, actorID string, subscription Subscription, expectedRevision uint64, event audit.Event) error
 }
 

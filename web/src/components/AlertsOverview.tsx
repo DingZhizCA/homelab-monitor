@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react'
 import { BellRing, RefreshCw } from 'lucide-react'
 import { AlertRuleManagement } from '@/components/AlertRuleManagement'
+import { NotificationSubscriptionManagement } from '@/components/NotificationSubscriptionManagement'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -77,6 +78,7 @@ export function AlertsOverview({ devices, role }: { devices: DeviceState[]; role
       <CardContent className="grid gap-2 text-sm"><div className="flex justify-between gap-3"><span className="text-muted-foreground">最近评估</span><span>{evaluationLabel[incident.last_evaluation]}</span></div><div className="flex justify-between gap-3"><span className="text-muted-foreground">评估时间</span><time dateTime={incident.last_evaluated_at}>{formatTime(incident.last_evaluated_at)}</time></div>{transitionTime(incident) && <div className="flex justify-between gap-3"><span className="text-muted-foreground">状态起始</span><time dateTime={transitionTime(incident)}>{formatTime(transitionTime(incident))}</time></div>}</CardContent>
     </Card>)}</div>}
     {role === 'owner' && activeDeviceID && <AlertRuleManagement key={activeDeviceID} deviceID={activeDeviceID} incidents={incidents} onActivated={() => void load(activeDeviceID)}/>}
+    {activeDeviceID && <NotificationSubscriptionManagement key={`subscriptions/${activeDeviceID}`} deviceID={activeDeviceID}/>}
   </section>
 }
 
