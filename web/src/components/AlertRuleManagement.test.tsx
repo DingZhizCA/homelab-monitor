@@ -107,9 +107,10 @@ describe('AlertRuleManagement', () => {
   expect(activated).toHaveBeenCalledOnce()
   })
 
-  it('loads superseded Incident archives only after an explicit bounded request', async () => {
+  it('loads Incident archives and transitions only after explicit bounded requests', async () => {
     const current = { id: 'high-cpu', device_id: 'node-a', revision: 2, severity: 'warning', enabled: true, expression: { metric: { descriptor_id: 'cpu.usage_percent', operator: 'gt', threshold: 90, unit: 'percent' } } }
     let archiveRequest = ''
+    let transitionRequest = ''
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
       if (path.startsWith('/api/v1/owner/alert-rules?')) return { ok: true, status: 200, json: async () => ({ rules: [current] }) }
@@ -118,6 +119,10 @@ describe('AlertRuleManagement', () => {
       if (path.startsWith('/api/v1/alerts/incidents/history?')) {
         archiveRequest = path
         return { ok: true, status: 200, json: async () => ({ archives: [{ state: { device_id: 'node-a', rule_id: 'high-cpu', rule_revision: 1, status: 'firing', last_evaluated_at: '2026-10-26T08:00:00Z', last_evaluation: 'true' }, disposition: 'superseded', superseded_by_revision: 2, superseded_at: '2026-10-26T09:00:00Z' }] }) }
+      }
+      if (path.startsWith('/api/v1/alerts/incidents/transitions?')) {
+        transitionRequest = path
+        return { ok: true, status: 200, json: async () => ({ transitions: [{ id: 'event-1', device_id: 'node-a', rule_id: 'high-cpu', rule_revision: 2, from_status: 'inactive', to_status: 'firing', occurred_at: '2026-10-26T10:00:00Z', state: { device_id: 'node-a', rule_id: 'high-cpu', rule_revision: 2, status: 'firing', last_evaluated_at: '2026-10-26T10:00:00Z', last_evaluation: 'true' } }] }) }
       }
       throw new Error(`unexpected request ${path}`)
     }))
@@ -133,5 +138,13 @@ describe('AlertRuleManagement', () => {
     fireEvent.click(screen.getByRole('button', { name: '读取 Incident 归档' }))
     expect(await screen.findByText('由 Revision 2 替代')).toBeInTheDocument()
     expect(archiveRequest).toContain('device_id=node-a&rule_id=high-cpu&limit=3')
+    expect(transitionRequest).toBe('')
+    fireEvent.click(screen.getByRole('button', { name: '读取状态转换' }))
+    expect(await screen.findByText('请填写正整数转换条数上限。')).toBeInTheDocument()
+    expect(transitionRequest).toBe('')
+    fireEvent.change(screen.getByLabelText('转换条数上限'), { target: { value: '4' } })
+    fireEvent.click(screen.getByRole('button', { name: '读取状态转换' }))
+    expect(await screen.findByText('inactive → firing')).toBeInTheDocument()
+    expect(transitionRequest).toContain('device_id=node-a&rule_id=high-cpu&limit=4')
   })
 })

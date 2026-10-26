@@ -173,6 +173,18 @@ export interface IncidentArchive {
   superseded_at: string
 }
 
+/** Immutable event emitted only when an Incident status actually changes. */
+export interface IncidentTransition {
+  id: string
+  device_id: string
+  rule_id: string
+  rule_revision: number
+  from_status: IncidentState['status']
+  to_status: IncidentState['status']
+  occurred_at: string
+  state: IncidentState
+}
+
 /** Lifecycle state for one explicitly authorized disk-capacity refresh. */
 export interface RefreshJob {
   request_id: string

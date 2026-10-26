@@ -7,7 +7,7 @@ import { History, PencilLine, Plus, RotateCcw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import type { IncidentArchive, IncidentState, MetricDescriptor } from '@/types'
+import type { IncidentArchive, IncidentState, IncidentTransition, MetricDescriptor } from '@/types'
 
 type Severity = 'critical' | 'warning' | 'info'
 type Operator = 'gt' | 'gte' | 'lt' | 'lte'
@@ -35,8 +35,14 @@ export function AlertRuleManagement({ deviceID, incidents = [], onActivated }: {
   const [archiveLoading, setArchiveLoading] = useState(false)
   const [archiveLoaded, setArchiveLoaded] = useState(false)
   const [archiveMessage, setArchiveMessage] = useState('')
+  const [transitionLimit, setTransitionLimit] = useState('')
+  const [transitions, setTransitions] = useState<IncidentTransition[]>([])
+  const [transitionLoading, setTransitionLoading] = useState(false)
+  const [transitionLoaded, setTransitionLoaded] = useState(false)
+  const [transitionMessage, setTransitionMessage] = useState('')
   const historyRequest = useRef<AbortController | null>(null)
   const archiveRequest = useRef<AbortController | null>(null)
+  const transitionRequest = useRef<AbortController | null>(null)
   const selectedDescriptor = useMemo(() => descriptors.find(descriptor => descriptor.id === form.descriptorID), [descriptors, form.descriptorID])
 
   useEffect(() => {
@@ -52,7 +58,7 @@ export function AlertRuleManagement({ deviceID, incidents = [], onActivated }: {
     }).catch(reason => {
       if (!(reason instanceof Error && reason.name === 'AbortError')) setMessage(reason instanceof Error ? reason.message : '无法读取告警规则。')
     }).finally(() => { if (!controller.signal.aborted) setLoading(false) })
-    return () => { controller.abort(); historyRequest.current?.abort(); archiveRequest.current?.abort() }
+    return () => { controller.abort(); historyRequest.current?.abort(); archiveRequest.current?.abort(); transitionRequest.current?.abort() }
   }, [deviceID])
 
   function createRule() {
@@ -118,6 +124,8 @@ export function AlertRuleManagement({ deviceID, incidents = [], onActivated }: {
       historyRequest.current = null
       archiveRequest.current?.abort()
       archiveRequest.current = null
+      transitionRequest.current?.abort()
+      transitionRequest.current = null
       setHistoryRuleID('')
       setRevisions([])
       setHistoryMessage('')
@@ -125,8 +133,24 @@ export function AlertRuleManagement({ deviceID, incidents = [], onActivated }: {
       setArchives([])
       setArchiveLoaded(false)
       setArchiveMessage('')
+      setTransitionLimit('')
+      setTransitions([])
+      setTransitionLoaded(false)
+      setTransitionMessage('')
       return
     }
+    archiveRequest.current?.abort()
+    archiveRequest.current = null
+    transitionRequest.current?.abort()
+    transitionRequest.current = null
+    setArchiveLimit('')
+    setArchives([])
+    setArchiveLoaded(false)
+    setArchiveMessage('')
+    setTransitionLimit('')
+    setTransitions([])
+    setTransitionLoaded(false)
+    setTransitionMessage('')
     setHistoryRuleID(rule.id)
     await loadHistory(rule.id)
   }
@@ -156,6 +180,35 @@ export function AlertRuleManagement({ deviceID, incidents = [], onActivated }: {
       if (archiveRequest.current === controller) {
         archiveRequest.current = null
         setArchiveLoading(false)
+      }
+    }
+  }
+
+  async function loadTransitions() {
+    const limit = Number(transitionLimit)
+    if (!Number.isInteger(limit) || limit < 1) {
+      setTransitionMessage('请填写正整数转换条数上限。')
+      return
+    }
+    transitionRequest.current?.abort()
+    const controller = new AbortController()
+    transitionRequest.current = controller
+    setTransitionLoading(true)
+    setTransitionLoaded(false)
+    setTransitionMessage('')
+    const query = new URLSearchParams({ device_id: deviceID, rule_id: historyRuleID, limit: String(limit) })
+    try {
+      const result = await request<{ transitions: IncidentTransition[] }>(`/api/v1/alerts/incidents/transitions?${query}`, { signal: controller.signal })
+      if (!controller.signal.aborted) {
+        setTransitions(result.transitions)
+        setTransitionLoaded(true)
+      }
+    } catch (reason) {
+      if (!(reason instanceof Error && reason.name === 'AbortError')) setTransitionMessage(reason instanceof Error ? reason.message : '无法读取 Incident 转换历史。')
+    } finally {
+      if (transitionRequest.current === controller) {
+        transitionRequest.current = null
+        setTransitionLoading(false)
       }
     }
   }
@@ -220,6 +273,7 @@ export function AlertRuleManagement({ deviceID, incidents = [], onActivated }: {
       {loading ? <p role="status" className="text-sm text-muted-foreground">正在读取规则…</p> : rules.length === 0 ? <p className="text-sm text-muted-foreground">该设备还没有规则。</p> : <ul className="divide-y rounded-lg border">{rules.map(rule => { const incident = incidents.find(item => item.rule_id === rule.id); const needsActivation = incident && incident.rule_revision !== rule.revision; return <li key={rule.id} className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><b>{rule.id}</b><Badge variant="outline">Revision {rule.revision}</Badge><Badge variant="secondary">{severityLabel(rule.severity)}</Badge><span className="text-xs text-muted-foreground">{rule.enabled ? '已启用' : '已停用'}</span>{needsActivation && <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-300">等待激活</Badge>}</div><p className="mt-1 break-words text-xs text-muted-foreground">{describeExpression(rule.expression)}</p>{needsActivation && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">当前 Incident 属于 Revision {incident.rule_revision}，评估已暂停。</p>}</div><div className="flex flex-wrap items-center gap-2">{needsActivation && <Button type="button" size="sm" disabled={busy} onClick={() => void activateRevision(rule, incident)}>归档 Revision {incident.rule_revision} 并激活 Revision {rule.revision}</Button>}{rule.expression.metric ? <Button type="button" size="sm" variant="outline" onClick={() => editRule(rule)}><PencilLine/>修订</Button> : <span className="text-xs text-muted-foreground">复杂表达式只读</span>}<Button type="button" size="sm" variant="outline" onClick={() => void toggleHistory(rule)}><History/>{historyRuleID === rule.id ? '收起历史' : '历史'}</Button></div></li> })}</ul>}
       {historyRuleID && <div className="grid gap-3 rounded-lg border p-4"><h3 className="font-medium">{historyRuleID} 的不可变历史</h3>{historyMessage && <p role="alert" className="text-sm text-destructive">{historyMessage}</p>}{historyLoading ? <p role="status" className="text-sm text-muted-foreground">正在读取规则历史…</p> : revisions.length === 0 ? <p className="text-sm text-muted-foreground">暂无历史 Revision。</p> : <ul className="divide-y">{revisions.map(revision => { const current = rules.find(rule => rule.id === historyRuleID); return <li key={revision.revision} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm"><div><div className="flex items-center gap-2"><b>Revision {revision.revision}</b>{current?.revision === revision.revision && <Badge variant="secondary">当前</Badge>}<span className="text-xs text-muted-foreground">{severityLabel(revision.severity)} · {revision.enabled ? '已启用' : '已停用'}</span></div><p className="mt-1 break-words text-xs text-muted-foreground">{describeExpression(revision.expression)}</p></div>{current && current.revision !== revision.revision && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void rollback(current, revision)}><RotateCcw/>以 Revision {revision.revision} 创建 Revision {current.revision + 1}</Button>}</li> })}</ul>}
         <div className="grid gap-3 border-t pt-3"><div><h4 className="text-sm font-medium">Superseded Incident 归档</h4><p className="mt-1 text-xs text-muted-foreground">明确填写本次最多读取的条数；查询不会评估规则或触发采集。</p></div><div className="flex flex-wrap items-end gap-2"><label className="grid gap-1 text-sm">归档条数上限<input aria-label="归档条数上限" type="number" min="1" step="1" value={archiveLimit} onChange={event => setArchiveLimit(event.target.value)} className="w-40 rounded-md border bg-background px-3 py-2"/></label><Button type="button" size="sm" variant="outline" disabled={archiveLoading} onClick={() => void loadArchives()}>{archiveLoading ? '读取中…' : '读取 Incident 归档'}</Button></div>{archiveMessage && <p role="alert" className="text-sm text-destructive">{archiveMessage}</p>}{archives.length > 0 && <ul className="divide-y rounded-lg border px-3">{archives.map(archive => <li key={archive.state.rule_revision} className="py-3 text-sm"><div className="flex flex-wrap items-center gap-2"><b>Revision {archive.state.rule_revision}</b><Badge variant="outline">{archive.state.status}</Badge><span className="text-xs text-muted-foreground">由 Revision {archive.superseded_by_revision} 替代</span></div><p className="mt-1 text-xs text-muted-foreground">归档时间 {archive.superseded_at} · 最后评估 {archive.state.last_evaluated_at}</p></li>)}</ul>}{archiveLoaded && archives.length === 0 && <p className="text-sm text-muted-foreground">该范围内没有 superseded Incident 归档。</p>}</div>
+        <div className="grid gap-3 border-t pt-3"><div><h4 className="text-sm font-medium">Incident 状态转换</h4><p className="mt-1 text-xs text-muted-foreground">只包含状态真正变化的事件；明确填写本次最多读取的条数。</p></div><div className="flex flex-wrap items-end gap-2"><label className="grid gap-1 text-sm">转换条数上限<input aria-label="转换条数上限" type="number" min="1" step="1" value={transitionLimit} onChange={event => setTransitionLimit(event.target.value)} className="w-40 rounded-md border bg-background px-3 py-2"/></label><Button type="button" size="sm" variant="outline" disabled={transitionLoading} onClick={() => void loadTransitions()}>{transitionLoading ? '读取中…' : '读取状态转换'}</Button></div>{transitionMessage && <p role="alert" className="text-sm text-destructive">{transitionMessage}</p>}{transitions.length > 0 && <ul className="divide-y rounded-lg border px-3">{transitions.map(transition => <li key={transition.id} className="py-3 text-sm"><div className="flex flex-wrap items-center gap-2"><b>Revision {transition.rule_revision}</b><Badge variant="outline">{transition.from_status} → {transition.to_status}</Badge><span className="text-xs text-muted-foreground">{transition.state.last_evaluation}</span></div><p className="mt-1 text-xs text-muted-foreground">发生时间 {transition.occurred_at}</p></li>)}</ul>}{transitionLoaded && transitions.length === 0 && <p className="text-sm text-muted-foreground">该范围内没有状态转换。</p>}</div>
       </div>}
       {editingID !== null && <form onSubmit={event => void save(event)} className="grid gap-3 rounded-lg border p-4"><h3 className="font-medium">{editingID ? `修订 ${editingID}` : '新建单指标规则'}</h3><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         <label className="grid gap-1 text-sm">规则 ID<input aria-label="规则 ID" required disabled={editingID !== ''} value={form.ruleID} onChange={event => setForm(current => ({ ...current, ruleID: event.target.value }))} className="rounded-md border bg-background px-3 py-2"/></label>
