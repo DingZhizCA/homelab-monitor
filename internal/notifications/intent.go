@@ -76,11 +76,8 @@ func Plan(transition alerts.IncidentTransition, severity alerts.Severity) (Inten
 
 // ValidateIntent verifies a persisted outbox fact without external lookups.
 func ValidateIntent(intent Intent) error {
-	if len(intent.ID) != sha256.Size*2 {
-		return errors.New("notification intent ID is invalid")
-	}
-	if _, err := hex.DecodeString(intent.ID); err != nil {
-		return errors.New("notification intent ID is invalid")
+	if err := ValidateIntentID(intent.ID); err != nil {
+		return err
 	}
 	if len(intent.TransitionID) != sha256.Size*2 || strings.TrimSpace(intent.DeviceID) == "" || strings.TrimSpace(intent.DeviceID) != intent.DeviceID || strings.TrimSpace(intent.RuleID) == "" || intent.RuleRevision == 0 || intent.CreatedAt.IsZero() {
 		return errors.New("notification intent identity is invalid")
@@ -99,6 +96,17 @@ func ValidateIntent(intent Intent) error {
 	}
 	if intent.DeliveryPolicy != expectedPolicy || intent.ID != intentID(intent.TransitionID, intent.Kind) {
 		return errors.New("notification intent policy or deduplication key is invalid")
+	}
+	return nil
+}
+
+// ValidateIntentID rejects malformed outbox acknowledgement keys.
+func ValidateIntentID(id string) error {
+	if len(id) != sha256.Size*2 {
+		return errors.New("notification intent ID is invalid")
+	}
+	if _, err := hex.DecodeString(id); err != nil {
+		return errors.New("notification intent ID is invalid")
 	}
 	return nil
 }
