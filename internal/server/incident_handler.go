@@ -21,17 +21,21 @@ type IncidentHandler struct {
 	service     *alerts.IncidentService
 	activation  *alerts.IncidentActivationService
 	archives    *alerts.IncidentArchiveService
+	transitions *alerts.IncidentTransitionService
 	auth        *AuthHandler
 	maxBodySize int64
 }
 
 // NewIncidentHandler requires query and activation services, matching auth, and a request limit.
-func NewIncidentHandler(service *alerts.IncidentService, activation *alerts.IncidentActivationService, archives *alerts.IncidentArchiveService, authHandler *AuthHandler, maxBodySize int64) (*IncidentHandler, error) {
+func NewIncidentHandler(service *alerts.IncidentService, activation *alerts.IncidentActivationService, archives *alerts.IncidentArchiveService, transitions *alerts.IncidentTransitionService, authHandler *AuthHandler, maxBodySize int64) (*IncidentHandler, error) {
 	if service == nil || activation == nil || archives == nil || authHandler == nil || maxBodySize < 1 {
 		return nil, errors.New("Incident query, activation, and archive services, auth handler, and positive body limit are required")
 	}
-	return &IncidentHandler{service: service, activation: activation, archives: archives, auth: authHandler, maxBodySize: maxBodySize}, nil
+	return &IncidentHandler{service: service, activation: activation, archives: archives, transitions: transitions, auth: authHandler, maxBodySize: maxBodySize}, nil
 }
+
+// HasTransitionHistory reports whether the optional query boundary is enabled.
+func (h *IncidentHandler) HasTransitionHistory() bool { return h != nil && h.transitions != nil }
 
 // Current lists current Incident transition states for one device.
 func (h *IncidentHandler) Current(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +108,54 @@ func (h *IncidentHandler) Archives(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		Archives []alerts.IncidentArchive `json:"archives"`
 	}{archives})
+}
+
+// Transitions lists bounded status changes for one rule.
+func (h *IncidentHandler) Transitions(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	principal, ok := authenticatedPrincipal(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "a valid session is required")
+		return
+	}
+	deviceID, ruleID, limit, ok := incidentHistoryQuery(w, r, "INVALID_INCIDENT_TRANSITION_QUERY")
+	if !ok {
+		return
+	}
+	transitions, err := h.transitions.List(r.Context(), principal, deviceID, ruleID, limit)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrForbidden):
+			writeError(w, http.StatusForbidden, "USER_REQUIRED", "an authenticated Owner or Viewer is required")
+		case errors.Is(err, alerts.ErrInvalidIncidentRequest):
+			writeError(w, http.StatusBadRequest, "INVALID_INCIDENT_TRANSITION_QUERY", "valid device, rule, and bounded limit are required")
+		default:
+			writeError(w, http.StatusInternalServerError, "INCIDENT_TRANSITION_QUERY_UNAVAILABLE", "Incident transitions could not be loaded")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Transitions []alerts.IncidentTransition `json:"transitions"`
+	}{transitions})
+}
+
+func incidentHistoryQuery(w http.ResponseWriter, r *http.Request, code string) (string, string, int, bool) {
+	query := r.URL.Query()
+	deviceIDs, hasDevice := query["device_id"]
+	ruleIDs, hasRule := query["rule_id"]
+	limits, hasLimit := query["limit"]
+	if !hasDevice || !hasRule || !hasLimit || len(deviceIDs) != 1 || len(ruleIDs) != 1 || len(limits) != 1 || len(query) != 3 {
+		writeError(w, http.StatusBadRequest, code, "one device_id, rule_id, and limit are required")
+		return "", "", 0, false
+	}
+	limit, err := strconv.Atoi(limits[0])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, code, "limit must be a positive bounded integer")
+		return "", "", 0, false
+	}
+	return deviceIDs[0], ruleIDs[0], limit, true
 }
 
 // Activate explicitly archives an older current state for a new rule revision.

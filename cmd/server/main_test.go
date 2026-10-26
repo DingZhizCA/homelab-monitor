@@ -473,6 +473,13 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"rule_id":"high-cpu"`) {
 		t.Fatalf("Incident query status=%d body=%s", response.Code, response.Body.String())
 	}
+	request = httptest.NewRequest(http.MethodGet, "https://monitor.example/api/v1/alerts/incidents/transitions?device_id=node-a&rule_id=high-cpu&limit=2", nil)
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != `{"transitions":[]}`+"\n" {
+		t.Fatalf("Incident transition query status=%d body=%s", response.Code, response.Body.String())
+	}
 	request = authenticatedMutationRequest(http.MethodPut, "/api/v1/owner/alert-rules", `{"expected_current":1,"rule":{"id":"high-cpu","device_id":"node-a","revision":2,"severity":"warning","enabled":true,"expression":{"metric":{"descriptor_id":"cpu.usage_percent","operator":"gt","threshold":90,"unit":"percent"}}}}`)
 	request.AddCookie(cookies[0])
 	response = httptest.NewRecorder()

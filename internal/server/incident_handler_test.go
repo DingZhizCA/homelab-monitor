@@ -22,6 +22,7 @@ type testIncidentActivationRepository struct {
 	ruleID         string
 	targetRevision uint64
 	archives       []alerts.IncidentArchive
+	transitions    []alerts.IncidentTransition
 }
 
 func (r *testIncidentActivationRepository) ActivateRuleRevisionWithAudit(_ context.Context, actorID, deviceID, ruleID string, targetRevision uint64, _ audit.Event) (alerts.IncidentActivationResult, error) {
@@ -31,6 +32,10 @@ func (r *testIncidentActivationRepository) ActivateRuleRevisionWithAudit(_ conte
 
 func (r *testIncidentActivationRepository) ListArchives(_ context.Context, _, _ string, _ int) ([]alerts.IncidentArchive, error) {
 	return r.archives, nil
+}
+
+func (r *testIncidentActivationRepository) ListTransitions(_ context.Context, _, _ string, _ int) ([]alerts.IncidentTransition, error) {
+	return r.transitions, nil
 }
 
 func TestIncidentRouteAllowsOwnerAndViewerDeviceReads(t *testing.T) {
@@ -52,7 +57,11 @@ func TestIncidentRouteAllowsOwnerAndViewerDeviceReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewIncidentHandler(service, activation, archiveService, fixture.handler, 4096)
+	transitionService, err := alerts.NewIncidentTransitionService(activationRepository, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewIncidentHandler(service, activation, archiveService, transitionService, fixture.handler, 4096)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +123,14 @@ func TestIncidentRouteAllowsOwnerAndViewerDeviceReads(t *testing.T) {
 		t.Fatalf("Viewer archive query status=%d body=%s", response.Code, response.Body.String())
 	}
 
+	request = authRequest(http.MethodGet, "https://monitor.example/api/v1/alerts/incidents/transitions?device_id=node%2Fa&rule_id=high-cpu&limit=4", "")
+	request.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: viewerToken})
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != `{"transitions":[]}`+"\n" {
+		t.Fatalf("Viewer transition query status=%d body=%s", response.Code, response.Body.String())
+	}
+
 	body := `{"device_id":"node/a","rule_id":"high-cpu","target_revision":2}`
 	request = authRequest(http.MethodPost, "https://monitor.example/api/v1/owner/alerts/incidents/activate", body)
 	request.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: viewerToken})
@@ -153,7 +170,7 @@ func TestRouterRejectsIncidentHandlerWithDifferentAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewIncidentHandler(service, activation, archiveService, first.handler, 1024)
+	handler, err := NewIncidentHandler(service, activation, archiveService, nil, first.handler, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}

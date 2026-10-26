@@ -655,7 +655,14 @@ func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRu
 	if err != nil {
 		return nil, err
 	}
-	handler, err := server.NewIncidentHandler(service, activation, archives, humanAuth.handler, ruleConfig.maxBodyBytes)
+	var transitions *alerts.IncidentTransitionService
+	if config.maxIncidentTransitions > 0 {
+		transitions, err = alerts.NewIncidentTransitionService(incidents, config.maxIncidentTransitions)
+		if err != nil {
+			return nil, err
+		}
+	}
+	handler, err := server.NewIncidentHandler(service, activation, archives, transitions, humanAuth.handler, ruleConfig.maxBodyBytes)
 	if err != nil {
 		return nil, err
 	}

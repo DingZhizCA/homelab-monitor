@@ -28,6 +28,7 @@ type IncidentRepository struct {
 var _ alerts.IncidentRepository = (*IncidentRepository)(nil)
 var _ alerts.IncidentActivationRepository = (*IncidentRepository)(nil)
 var _ alerts.IncidentArchiveSource = (*IncidentRepository)(nil)
+var _ alerts.IncidentTransitionSource = (*IncidentRepository)(nil)
 
 // NewIncidentRepository requires explicit current-state and archive capacities.
 func NewIncidentRepository(database *sql.DB, maxEntries, maxArchiveEntries int) (*IncidentRepository, error) {
@@ -75,6 +76,37 @@ func (r *IncidentRepository) ListArchives(ctx context.Context, deviceID, ruleID 
 		return nil, fmt.Errorf("iterate Incident archives: %w", err)
 	}
 	return archives, nil
+}
+
+// ListTransitions returns newest status changes first with an explicit limit.
+func (r *IncidentRepository) ListTransitions(ctx context.Context, deviceID, ruleID string, limit int) ([]alerts.IncidentTransition, error) {
+	if err := validateIncidentIdentity(deviceID, ruleID); err != nil || r.maxTransitionEntries < 1 || limit < 1 || limit > r.maxTransitionEntries {
+		return nil, alerts.ErrInvalidIncidentRequest
+	}
+	rows, err := r.database.QueryContext(ctx, `SELECT transition_json FROM incident_transitions WHERE device_id = ? AND rule_id = ? ORDER BY occurred_at DESC, event_id DESC LIMIT ?`, deviceID, ruleID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list Incident transitions: %w", err)
+	}
+	defer rows.Close()
+	transitions := make([]alerts.IncidentTransition, 0)
+	for rows.Next() {
+		var encoded []byte
+		if err := rows.Scan(&encoded); err != nil {
+			return nil, fmt.Errorf("scan Incident transition: %w", err)
+		}
+		var transition alerts.IncidentTransition
+		if err := json.Unmarshal(encoded, &transition); err != nil {
+			return nil, fmt.Errorf("decode stored Incident transition: %w", err)
+		}
+		if err := alerts.ValidateIncidentTransition(transition); err != nil || transition.DeviceID != deviceID || transition.RuleID != ruleID {
+			return nil, errors.New("stored Incident transition is invalid")
+		}
+		transitions = append(transitions, transition)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Incident transitions: %w", err)
+	}
+	return transitions, nil
 }
 
 // ActivateRuleRevisionWithAudit archives an older current state and clears it atomically.

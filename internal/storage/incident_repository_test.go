@@ -203,6 +203,10 @@ func TestIncidentRepositoryPersistsStatusChangesAtomicallyWithinCapacity(t *test
 	if err := json.Unmarshal(encoded, &transition); err != nil || alerts.ValidateIncidentTransition(transition) != nil || transition.ToStatus != alerts.IncidentFiring {
 		t.Fatalf("stored transition=%+v decode_err=%v", transition, err)
 	}
+	listed, err := repository.ListTransitions(context.Background(), rule.DeviceID, rule.ID, 1)
+	if err != nil || len(listed) != 1 || listed[0].ID != transition.ID {
+		t.Fatalf("listed transitions=%+v err=%v", listed, err)
+	}
 }
 
 func storedIncidentRule(revision uint64) alerts.Rule {

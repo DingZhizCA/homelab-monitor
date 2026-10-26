@@ -134,6 +134,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	if options.Incidents != nil {
 		mux.Handle("/api/v1/alerts/incidents", options.Auth.RequireUser(http.HandlerFunc(options.Incidents.Current)))
 		mux.Handle("/api/v1/alerts/incidents/history", options.Auth.RequireUser(http.HandlerFunc(options.Incidents.Archives)))
+		if options.Incidents.HasTransitionHistory() {
+			mux.Handle("/api/v1/alerts/incidents/transitions", options.Auth.RequireUser(http.HandlerFunc(options.Incidents.Transitions)))
+		}
 		mux.Handle("/api/v1/owner/alerts/incidents/activate", options.Auth.RequireOwnerMutation(http.HandlerFunc(options.Incidents.Activate)))
 	}
 	if options.WebDirectory != "" {

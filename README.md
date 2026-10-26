@@ -154,6 +154,7 @@ Agent 的 `metrics_batch` 也默认关闭。启用时必须使用 HTTPS 和设�
 | `GET/POST` | `/api/v1/owner/alert-rules/revisions` | 可选：由 Owner 查询不可变规则历史或以新 Revision 回滚 |
 | `GET` | `/api/v1/alerts/incidents` | 可选：评估启用后由认证用户按一个 `device_id` 查询当前 Incident 转换状态 |
 | `GET` | `/api/v1/alerts/incidents/history` | 可选：Owner 或 Viewer 按唯一 `device_id`、`rule_id` 和显式 `limit` 读取 superseded 归档 |
+| `GET` | `/api/v1/alerts/incidents/transitions` | 可选：转换历史启用后由 Owner 或 Viewer 按设备、规则和显式 `limit` 读取最新状态变化 |
 | `POST` | `/api/v1/owner/alerts/incidents/activate` | 可选：Owner 原子归档旧 Incident current 并显式激活当前 Rule Revision |
 
 主动磁盘刷新可能唤醒 HDD，因此必须明确授权：
@@ -227,7 +228,7 @@ web/                  React Dashboard
 
 - 兼容单快照接口只更新内存；只有持久化批量接口写入的设备快照会在 Server 重启时恢复。刷新任务仍为进程内状态，不会恢复。
 - 持久化认证、Owner 管理、内建当前指标、分层历史查询和 Dashboard 管理必须通过完整显式参数启用；默认运行保持这些路由关闭。`cmd/server` 的持久化历史按配置窗口读取日、小时、分钟和原始层，每个内建历史点显式返回分辨率与原始/均值聚合种类；底层原始历史适配器继续保留给兼容调用与测试。共享发布允许当前内建 Descriptor；插件引用还要求目录和历史查询面同时启用并通过完整版本身份的已观测校验。更细粒度设备/字段 ACL 和敏感操作再认证尚未实现。
-- 告警规则的不可变历史、回滚和审计可持久化装配；有界评估调度可从 Server 当前快照推进带容量和时间戳 CAS 的 SQLite Incident 状态，Owner 与 Viewer 可按设备读取该仓储的当前状态。跨 Revision 变更必须由 Owner 显式激活，旧 current 会进入有界不可变归档后再从新 Revision 干净评估。Incident 转换历史查询、规则删除、确认/静默、通知去重和投递仍未实现。
+- 告警规则的不可变历史、回滚和审计可持久化装配；有界评估调度可从 Server 当前快照推进带容量和时间戳 CAS 的 SQLite Incident 状态，Owner 与 Viewer 可按设备读取该仓储的当前状态。跨 Revision 变更必须由 Owner 显式激活，旧 current 会进入有界不可变归档后再从新 Revision 干净评估。Incident 转换历史 Web 展示、规则删除、确认/静默、通知去重和投递仍未实现。
 - 插件 Desired/Reported State、审计和制品路由可由 `cmd/server` 显式装配；Agent 可在有界私有状态中跨重启恢复回滚关联和同 Revision 隔离。Server 制品仓库有显式总字节、包数量和扫描边界，并按 Desired 引用与宽限期执行有界清理；参数仍需在目标设备调优。
 - Agent 的有界批量队列与插件控制均默认关闭，启用插件仍需本机信任根、权限 grant、私有状态目录，以及 staging 单包/总字节/包数/扫描/清理和全部运行参数有效。
 - 内建与插件指标已有 SQLite 原始持久化、事务型分钟/小时/日聚合队列、分层查询与保留、显式 PASSIVE checkpoint、软硬容量保护，以及独立的 WAL 截断和 incremental vacuum 物理回收。插件聚合保留类型语义、版本和标签，并显式返回粒度；Web Explore 已用已观测 Descriptor 目录构造精确历史选择器并展示类型化结果。Dashboard 编辑器可保存结构化插件引用，Server 共享发布会精确校验；插件 Widget 可按用户填写的范围和点数上限查询类型化历史。维护及聚合参数尚未在目标设备调优；流量归属账本、包声明元数据发布和完整 Incident/通知流程仍未实现。
