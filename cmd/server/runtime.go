@@ -19,6 +19,7 @@ import (
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
 	"github.com/DingZhizCA/homelab-monitor/internal/auth"
 	"github.com/DingZhizCA/homelab-monitor/internal/dashboard"
+	"github.com/DingZhizCA/homelab-monitor/internal/notifications"
 	"github.com/DingZhizCA/homelab-monitor/internal/pluginmetrics"
 	"github.com/DingZhizCA/homelab-monitor/internal/plugins"
 	"github.com/DingZhizCA/homelab-monitor/internal/server"
@@ -167,6 +168,17 @@ type alertRuleRuntimeConfig struct {
 	maxBodyBytes  int64
 	maxDepth      int
 	maxConditions int
+}
+
+type notificationSubscriptionRuntimeConfig struct {
+	maxBodyBytes  int64
+	maxRecords    int
+	maxPerUser    int
+	maxRecipients int
+}
+
+func (c notificationSubscriptionRuntimeConfig) disabled() bool {
+	return c.maxBodyBytes == 0 && c.maxRecords == 0 && c.maxPerUser == 0 && c.maxRecipients == 0
 }
 
 func (c alertRuleRuntimeConfig) disabled() bool {
@@ -601,6 +613,28 @@ func buildAlertRuleRuntime(databases *storage.Databases, humanAuth *authRuntime,
 		return nil, err
 	}
 	return server.NewAlertRuleHandler(service, humanAuth.handler, config.maxBodyBytes)
+}
+
+func buildNotificationSubscriptionRuntime(databases *storage.Databases, humanAuth *authRuntime, ruleConfig alertRuleRuntimeConfig, config notificationSubscriptionRuntimeConfig) (*server.NotificationSubscriptionHandler, error) {
+	if config.disabled() {
+		return nil, nil
+	}
+	if databases == nil || humanAuth == nil || humanAuth.handler == nil || humanAuth.registry == nil || ruleConfig.maxDepth < 1 || ruleConfig.maxConditions < 1 || config.maxBodyBytes < 1 || config.maxRecords < 1 || config.maxPerUser < 1 || config.maxRecipients < 1 {
+		return nil, errors.New("notification subscriptions require storage, human authentication, alert-rule validation, and positive request and capacity limits")
+	}
+	rules, err := storage.NewAlertRuleRepository(databases.Core, humanAuth.registry, alerts.Limits{MaxDepth: ruleConfig.maxDepth, MaxConditions: ruleConfig.maxConditions})
+	if err != nil {
+		return nil, err
+	}
+	repository, err := storage.NewNotificationSubscriptionRepository(databases.Core, config.maxRecords, config.maxPerUser, config.maxRecipients)
+	if err != nil {
+		return nil, err
+	}
+	service, err := notifications.NewSubscriptionService(repository, rules, time.Now)
+	if err != nil {
+		return nil, err
+	}
+	return server.NewNotificationSubscriptionHandler(service, humanAuth.handler, config.maxBodyBytes)
 }
 
 func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRuntime, snapshots dashboard.SnapshotSource, ruleConfig alertRuleRuntimeConfig, config alertEvaluationRuntimeConfig) (*alertEvaluationRuntime, error) {

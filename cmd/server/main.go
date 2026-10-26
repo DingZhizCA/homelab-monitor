@@ -120,6 +120,10 @@ func run() error {
 	alertRuleMaxBodyBytes := flag.Int64("alert-rule-max-body-bytes", 0, "maximum alert-rule mutation request body bytes")
 	alertRuleMaxDepth := flag.Int("alert-rule-max-depth", 0, "maximum alert-rule expression depth")
 	alertRuleMaxConditions := flag.Int("alert-rule-max-conditions", 0, "maximum metric conditions in one alert rule")
+	notificationSubscriptionMaxBodyBytes := flag.Int64("notification-subscription-max-body-bytes", 0, "optional maximum notification subscription mutation body bytes")
+	notificationSubscriptionMaxRecords := flag.Int("notification-subscription-max-records", 0, "optional maximum notification subscriptions retained")
+	notificationSubscriptionMaxPerUser := flag.Int("notification-subscription-max-per-user", 0, "optional maximum notification subscriptions retained per user")
+	notificationMaxRecipients := flag.Int("notification-max-recipients-per-intent", 0, "optional maximum recipients selected for one notification intent")
 	alertEvaluationEnabled := flag.Bool("alert-evaluation-enabled", false, "enable bounded evaluation of current alert rules")
 	alertEvaluationInterval := flag.Duration("alert-evaluation-interval", 0, "interval between alert evaluation runs")
 	alertEvaluationTimeout := flag.Duration("alert-evaluation-timeout", 0, "timeout for one alert evaluation run")
@@ -318,6 +322,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	notificationSubscriptions, err := buildNotificationSubscriptionRuntime(databases, humanAuth, alertRuleRuntimeConfig{
+		maxBodyBytes: *alertRuleMaxBodyBytes, maxDepth: *alertRuleMaxDepth, maxConditions: *alertRuleMaxConditions,
+	}, notificationSubscriptionRuntimeConfig{
+		maxBodyBytes: *notificationSubscriptionMaxBodyBytes, maxRecords: *notificationSubscriptionMaxRecords,
+		maxPerUser: *notificationSubscriptionMaxPerUser, maxRecipients: *notificationMaxRecipients,
+	})
+	if err != nil {
+		return err
+	}
 	alertEvaluation, err := buildAlertEvaluationRuntime(databases, humanAuth, store, alertRuleRuntimeConfig{
 		maxBodyBytes: *alertRuleMaxBodyBytes, maxDepth: *alertRuleMaxDepth, maxConditions: *alertRuleMaxConditions,
 	}, alertEvaluationRuntimeConfig{
@@ -355,6 +368,7 @@ func run() error {
 		options.Auth = humanAuth.handler
 		options.Dashboards = dashboards
 		options.AlertRules = alertRules
+		options.NotificationSubscriptions = notificationSubscriptions
 		if alertEvaluation != nil {
 			options.Incidents = alertEvaluation.incidents
 		}

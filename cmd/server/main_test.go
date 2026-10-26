@@ -100,6 +100,12 @@ func TestOptionalRuntimesRequireCompleteExplicitConfiguration(t *testing.T) {
 	if handler, err := buildAlertRuleRuntime(nil, nil, alertRuleRuntimeConfig{maxBodyBytes: 1024}); err == nil || handler != nil {
 		t.Fatalf("partial alert-rule handler=%v err=%v", handler, err)
 	}
+	if handler, err := buildNotificationSubscriptionRuntime(nil, nil, alertRuleRuntimeConfig{}, notificationSubscriptionRuntimeConfig{}); err != nil || handler != nil {
+		t.Fatalf("disabled notification subscription handler=%v err=%v", handler, err)
+	}
+	if handler, err := buildNotificationSubscriptionRuntime(nil, nil, alertRuleRuntimeConfig{}, notificationSubscriptionRuntimeConfig{maxRecords: 1}); err == nil || handler != nil {
+		t.Fatalf("partial notification subscription handler=%v err=%v", handler, err)
+	}
 	if engine, err := buildAlertEvaluationRuntime(nil, nil, nil, alertRuleRuntimeConfig{}, alertEvaluationRuntimeConfig{}); err != nil || engine != nil {
 		t.Fatalf("disabled alert engine=%v err=%v", engine, err)
 	}
@@ -320,6 +326,12 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	notificationSubscriptionHandler, err := buildNotificationSubscriptionRuntime(databases, humanAuth,
+		alertRuleRuntimeConfig{maxBodyBytes: 1 << 20, maxDepth: 4, maxConditions: 8},
+		notificationSubscriptionRuntimeConfig{maxBodyBytes: 4096, maxRecords: 16, maxPerUser: 8, maxRecipients: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
 	zero := time.Duration(0)
 	partialArchivePolicy := alertEvaluationRuntimeConfig{
 		enabled: true, interval: time.Hour, timeout: time.Second, maxRulesPerRun: 10, maxIncidentStates: 10, maxIncidentArchives: 20,
@@ -382,7 +394,7 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	t.Cleanup(func() { _ = pluginsRuntime.Close() })
 	router, err := server.NewRouter(server.RouterOptions{
 		API: api, MetricsBatch: metricsBatch, Auth: humanAuth.handler,
-		Dashboards: dashboardHandler, AlertRules: alertRuleHandler, Incidents: alertEvaluation.incidents, MetricQueries: humanAuth.queries, MetricHistory: humanAuth.history,
+		Dashboards: dashboardHandler, AlertRules: alertRuleHandler, Incidents: alertEvaluation.incidents, NotificationSubscriptions: notificationSubscriptionHandler, MetricQueries: humanAuth.queries, MetricHistory: humanAuth.history,
 		PluginControl: pluginsRuntime.control, PluginArtifacts: pluginsRuntime.artifacts, PluginAdmin: pluginsRuntime.admin,
 	})
 	if err != nil {
@@ -457,6 +469,20 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("alert-rule save status=%d body=%s", response.Code, response.Body.String())
+	}
+	request = authenticatedMutationRequest(http.MethodPut, "/api/v1/notifications/subscriptions", `{"expected_revision":0,"subscription":{"device_id":"node-a","rule_id":"high-cpu","severity":"warning","revision":1,"enabled":true,"channels":{"in_app":true,"push":false}}}`)
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("notification subscription save status=%d body=%s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "https://monitor.example/api/v1/notifications/subscriptions?limit=8", nil)
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"rule_id":"high-cpu"`) {
+		t.Fatalf("notification subscription list status=%d body=%s", response.Code, response.Body.String())
 	}
 	alertSummary := alertEvaluation.engine.RunOnce(context.Background())
 	if alertSummary.Succeeded != 1 || alertSummary.Failed != 0 {
