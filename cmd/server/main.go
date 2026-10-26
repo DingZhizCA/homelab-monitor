@@ -124,6 +124,16 @@ func run() error {
 	notificationSubscriptionMaxRecords := flag.Int("notification-subscription-max-records", 0, "optional maximum notification subscriptions retained")
 	notificationSubscriptionMaxPerUser := flag.Int("notification-subscription-max-per-user", 0, "optional maximum notification subscriptions retained per user")
 	notificationMaxRecipients := flag.Int("notification-max-recipients-per-intent", 0, "optional maximum recipients selected for one notification intent")
+	notificationProcessingInterval := flag.Duration("notification-processing-interval", 0, "optional interval between bounded notification processing passes")
+	notificationProcessingTimeout := flag.Duration("notification-processing-timeout", 0, "optional timeout for one notification processing pass")
+	notificationProcessingMaxBatch := flag.Int("notification-processing-max-batch", 0, "optional maximum intents processed in one pass")
+	notificationIntentMaxRecords := flag.Int("notification-intent-max-records", 0, "optional maximum pending notification intents")
+	notificationDeadLetterMaxRecords := flag.Int("notification-dead-letter-max-records", 0, "optional maximum notification dead letters")
+	notificationRecipientMaxRecords := flag.Int("notification-recipient-max-records", 0, "optional maximum materialized recipient notifications")
+	notificationMaxAttempts := flag.Int("notification-max-attempts", 0, "optional maximum handler attempts before dead-lettering")
+	notificationRetryInitialBackoff := flag.Duration("notification-retry-initial-backoff", 0, "optional first notification retry delay")
+	notificationRetryMaxBackoff := flag.Duration("notification-retry-max-backoff", 0, "optional maximum notification retry delay")
+	notificationErrorMaxBytes := flag.Int("notification-error-max-bytes", 0, "optional maximum stored notification failure error bytes")
 	alertEvaluationEnabled := flag.Bool("alert-evaluation-enabled", false, "enable bounded evaluation of current alert rules")
 	alertEvaluationInterval := flag.Duration("alert-evaluation-interval", 0, "interval between alert evaluation runs")
 	alertEvaluationTimeout := flag.Duration("alert-evaluation-timeout", 0, "timeout for one alert evaluation run")
@@ -335,7 +345,7 @@ func run() error {
 		maxBodyBytes: *alertRuleMaxBodyBytes, maxDepth: *alertRuleMaxDepth, maxConditions: *alertRuleMaxConditions,
 	}, alertEvaluationRuntimeConfig{
 		enabled: *alertEvaluationEnabled, interval: *alertEvaluationInterval, timeout: *alertEvaluationTimeout,
-		maxRulesPerRun: *alertEvaluationMaxRules, maxIncidentStates: *incidentMaxStates, maxIncidentArchives: *incidentMaxArchives, maxIncidentTransitions: *incidentMaxTransitions,
+		maxRulesPerRun: *alertEvaluationMaxRules, maxIncidentStates: *incidentMaxStates, maxIncidentArchives: *incidentMaxArchives, maxIncidentTransitions: *incidentMaxTransitions, maxNotificationIntents: *notificationIntentMaxRecords,
 		archiveCleanupInterval: *incidentHistoryCleanupInterval, archiveRetention: *incidentHistoryRetention,
 		archiveCleanupLimit: *incidentHistoryCleanupLimit, archiveCleanupTimeout: *incidentHistoryCleanupTimeout,
 		pendingFor: incidentPendingFor.pointer(), recoveryFor: incidentRecoveryFor.pointer(),
@@ -343,6 +353,22 @@ func run() error {
 	})
 	if err != nil {
 		return err
+	}
+	notificationProcessing, err := buildNotificationProcessingRuntime(databases, notificationSubscriptionRuntimeConfig{
+		maxBodyBytes: *notificationSubscriptionMaxBodyBytes, maxRecords: *notificationSubscriptionMaxRecords,
+		maxPerUser: *notificationSubscriptionMaxPerUser, maxRecipients: *notificationMaxRecipients,
+	}, notificationProcessingRuntimeConfig{
+		interval: *notificationProcessingInterval, timeout: *notificationProcessingTimeout,
+		maxBatch: *notificationProcessingMaxBatch, maxPending: *notificationIntentMaxRecords,
+		maxDeadLetters: *notificationDeadLetterMaxRecords, maxNotifications: *notificationRecipientMaxRecords,
+		maxAttempts: *notificationMaxAttempts, initialBackoff: *notificationRetryInitialBackoff,
+		maxBackoff: *notificationRetryMaxBackoff, maxErrorBytes: *notificationErrorMaxBytes,
+	})
+	if err != nil {
+		return err
+	}
+	if notificationProcessing != nil && alertEvaluation == nil {
+		return errors.New("notification processing requires enabled alert evaluation with intent outbox")
 	}
 	pluginsRuntime, err := buildPluginRuntime(databases, deviceAuthorizer, humanAuth, pluginRuntimeConfig{
 		artifactDirectory:  *pluginArtifactDirectory,
@@ -481,6 +507,12 @@ func run() error {
 				<-retentionDone
 			}()
 		}
+	}
+	if notificationProcessing != nil {
+		notificationContext, cancelNotifications := context.WithCancel(ctx)
+		notificationDone := make(chan struct{})
+		go func() { notificationProcessing.engine.Run(notificationContext); close(notificationDone) }()
+		defer func() { cancelNotifications(); <-notificationDone }()
 	}
 	if pluginsRuntime != nil {
 		artifactContext, cancelArtifacts := context.WithCancel(ctx)

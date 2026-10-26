@@ -177,6 +177,18 @@ type notificationSubscriptionRuntimeConfig struct {
 	maxRecipients int
 }
 
+type notificationProcessingRuntimeConfig struct {
+	interval, timeout                time.Duration
+	maxBatch, maxPending             int
+	maxDeadLetters, maxNotifications int
+	maxAttempts, maxErrorBytes       int
+	initialBackoff, maxBackoff       time.Duration
+}
+
+func (c notificationProcessingRuntimeConfig) disabled() bool {
+	return c.interval == 0 && c.timeout == 0 && c.maxBatch == 0 && c.maxPending == 0 && c.maxDeadLetters == 0 && c.maxNotifications == 0 && c.maxAttempts == 0 && c.maxErrorBytes == 0 && c.initialBackoff == 0 && c.maxBackoff == 0
+}
+
 func (c notificationSubscriptionRuntimeConfig) disabled() bool {
 	return c.maxBodyBytes == 0 && c.maxRecords == 0 && c.maxPerUser == 0 && c.maxRecipients == 0
 }
@@ -193,6 +205,7 @@ type alertEvaluationRuntimeConfig struct {
 	maxIncidentStates      int
 	maxIncidentArchives    int
 	maxIncidentTransitions int
+	maxNotificationIntents int
 	archiveCleanupInterval time.Duration
 	archiveRetention       time.Duration
 	archiveCleanupLimit    int
@@ -210,8 +223,10 @@ type alertEvaluationRuntime struct {
 }
 
 func (c alertEvaluationRuntimeConfig) disabled() bool {
-	return !c.enabled && c.interval == 0 && c.timeout == 0 && c.maxRulesPerRun == 0 && c.maxIncidentStates == 0 && c.maxIncidentArchives == 0 && c.maxIncidentTransitions == 0 && c.archiveCleanupInterval == 0 && c.archiveRetention == 0 && c.archiveCleanupLimit == 0 && c.archiveCleanupTimeout == 0 && c.pendingFor == nil && c.recoveryFor == nil && c.unknownBehavior == "" && c.disabledBehavior == ""
+	return !c.enabled && c.interval == 0 && c.timeout == 0 && c.maxRulesPerRun == 0 && c.maxIncidentStates == 0 && c.maxIncidentArchives == 0 && c.maxIncidentTransitions == 0 && c.maxNotificationIntents == 0 && c.archiveCleanupInterval == 0 && c.archiveRetention == 0 && c.archiveCleanupLimit == 0 && c.archiveCleanupTimeout == 0 && c.pendingFor == nil && c.recoveryFor == nil && c.unknownBehavior == "" && c.disabledBehavior == ""
 }
+
+type notificationProcessingRuntime struct{ engine *notifications.Engine }
 
 type pluginRuntimeConfig struct {
 	artifactDirectory     string
@@ -637,6 +652,57 @@ func buildNotificationSubscriptionRuntime(databases *storage.Databases, humanAut
 	return server.NewNotificationSubscriptionHandler(service, humanAuth.handler, config.maxBodyBytes)
 }
 
+func buildNotificationProcessingRuntime(databases *storage.Databases, subscriptions notificationSubscriptionRuntimeConfig, config notificationProcessingRuntimeConfig) (*notificationProcessingRuntime, error) {
+	if config.disabled() {
+		return nil, nil
+	}
+	if databases == nil || subscriptions.maxRecords < 1 || subscriptions.maxPerUser < 1 || subscriptions.maxRecipients < 1 || config.interval <= 0 || config.timeout <= 0 || config.maxBatch < 1 || config.maxPending < 1 || config.maxDeadLetters < 1 || config.maxNotifications < 1 || config.maxAttempts < 1 || config.maxErrorBytes < 1 || config.initialBackoff <= 0 || config.maxBackoff < config.initialBackoff {
+		return nil, errors.New("notification processing requires storage, subscriptions, and complete positive scheduling, retry, and capacity limits")
+	}
+	recipients, err := storage.NewNotificationSubscriptionRepository(databases.Core, subscriptions.maxRecords, subscriptions.maxPerUser, subscriptions.maxRecipients)
+	if err != nil {
+		return nil, err
+	}
+	sink, err := storage.NewNotificationFanoutRepository(databases.Core, config.maxNotifications)
+	if err != nil {
+		return nil, err
+	}
+	handler, err := notifications.NewFanoutHandler(recipients, sink, subscriptions.maxRecipients)
+	if err != nil {
+		return nil, err
+	}
+	outbox, err := storage.NewNotificationOutboxRepository(databases.Core, config.maxBatch, config.maxDeadLetters, config.maxPending)
+	if err != nil {
+		return nil, err
+	}
+	retry := notifications.RetryPolicy{MaxAttempts: config.maxAttempts, InitialBackoff: config.initialBackoff, MaxBackoff: config.maxBackoff, MaxErrorBytes: config.maxErrorBytes}
+	processor, err := notifications.NewProcessor(outbox, handler, config.maxBatch, retry, logNotificationProcessObservation, time.Now)
+	if err != nil {
+		return nil, err
+	}
+	engine, err := notifications.NewEngine(processor, notifications.EngineConfig{Interval: config.interval, Timeout: config.timeout}, logNotificationEngineObservation, time.Now)
+	if err != nil {
+		return nil, err
+	}
+	return &notificationProcessingRuntime{engine: engine}, nil
+}
+
+func logNotificationProcessObservation(observation notifications.ProcessObservation) {
+	if observation.Err != nil {
+		log.Printf("component=notifications level=ERROR intent_id=%q stage=%q error=%q", observation.IntentID, observation.Stage, observation.Err)
+		return
+	}
+	log.Printf("component=notifications level=INFO intent_id=%q stage=%q", observation.IntentID, observation.Stage)
+}
+
+func logNotificationEngineObservation(observation notifications.EngineObservation) {
+	if observation.Err != nil {
+		log.Printf("component=notifications level=ERROR read=%d handled=%d deferred=%d dead_lettered=%d acknowledged=%d duration=%q error=%q", observation.Result.Read, observation.Result.Handled, observation.Result.Deferred, observation.Result.DeadLettered, observation.Result.Acknowledged, observation.Duration, observation.Err)
+		return
+	}
+	log.Printf("component=notifications level=INFO read=%d handled=%d deferred=%d dead_lettered=%d acknowledged=%d duration=%q", observation.Result.Read, observation.Result.Handled, observation.Result.Deferred, observation.Result.DeadLettered, observation.Result.Acknowledged, observation.Duration)
+}
+
 func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRuntime, snapshots dashboard.SnapshotSource, ruleConfig alertRuleRuntimeConfig, config alertEvaluationRuntimeConfig) (*alertEvaluationRuntime, error) {
 	if config.disabled() {
 		return nil, nil
@@ -654,7 +720,12 @@ func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRu
 		return nil, errors.New("Incident transition history requires complete positive history retention settings")
 	}
 	var incidents *storage.IncidentRepository
-	if config.maxIncidentTransitions > 0 {
+	if config.maxNotificationIntents > 0 {
+		if config.maxIncidentTransitions < 1 {
+			return nil, errors.New("notification intent outbox requires Incident transition history")
+		}
+		incidents, err = storage.NewIncidentRepositoryWithNotificationOutbox(databases.Core, config.maxIncidentStates, config.maxIncidentArchives, config.maxIncidentTransitions, config.maxNotificationIntents)
+	} else if config.maxIncidentTransitions > 0 {
 		incidents, err = storage.NewIncidentRepositoryWithTransitions(databases.Core, config.maxIncidentStates, config.maxIncidentArchives, config.maxIncidentTransitions)
 	} else {
 		incidents, err = storage.NewIncidentRepository(databases.Core, config.maxIncidentStates, config.maxIncidentArchives)
