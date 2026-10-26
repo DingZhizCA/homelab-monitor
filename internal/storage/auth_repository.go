@@ -188,6 +188,23 @@ var coreMigrations = []Migration{
 	CREATE INDEX incident_transitions_retention
 		ON incident_transitions (occurred_at, event_id);`,
 	},
+	{
+		Version: 10,
+		Name:    "notification_intent_outbox",
+		SQL: `CREATE TABLE notification_intent_outbox (
+		intent_id TEXT PRIMARY KEY,
+		transition_id TEXT NOT NULL UNIQUE,
+		device_id TEXT NOT NULL,
+		rule_id TEXT NOT NULL,
+		rule_revision INTEGER NOT NULL CHECK (rule_revision > 0),
+		kind TEXT NOT NULL CHECK (kind IN ('firing', 'recovery')),
+		delivery_policy TEXT NOT NULL CHECK (delivery_policy IN ('push_eligible', 'record_only')),
+		created_at TEXT NOT NULL,
+		intent_json BLOB NOT NULL
+	);
+	CREATE INDEX notification_intent_outbox_order
+		ON notification_intent_outbox (created_at, intent_id);`,
+	},
 }
 
 // AuthRepository implements the auth user and session persistence boundaries.

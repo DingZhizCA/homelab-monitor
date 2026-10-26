@@ -15,6 +15,7 @@ import (
 
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
 	"github.com/DingZhizCA/homelab-monitor/internal/audit"
+	"github.com/DingZhizCA/homelab-monitor/internal/notifications"
 )
 
 // IncidentRepository stores bounded current Incident state in core.db.
@@ -23,6 +24,7 @@ type IncidentRepository struct {
 	maxEntries           int
 	maxArchiveEntries    int
 	maxTransitionEntries int
+	maxIntentEntries     int
 }
 
 var _ alerts.IncidentRepository = (*IncidentRepository)(nil)
@@ -32,7 +34,7 @@ var _ alerts.IncidentTransitionSource = (*IncidentRepository)(nil)
 
 // NewIncidentRepository requires explicit current-state and archive capacities.
 func NewIncidentRepository(database *sql.DB, maxEntries, maxArchiveEntries int) (*IncidentRepository, error) {
-	return newIncidentRepository(database, maxEntries, maxArchiveEntries, 0)
+	return newIncidentRepository(database, maxEntries, maxArchiveEntries, 0, 0)
 }
 
 // NewIncidentRepositoryWithTransitions also persists bounded status changes.
@@ -40,14 +42,23 @@ func NewIncidentRepositoryWithTransitions(database *sql.DB, maxEntries, maxArchi
 	if maxTransitionEntries < 1 {
 		return nil, errors.New("positive Incident transition capacity is required")
 	}
-	return newIncidentRepository(database, maxEntries, maxArchiveEntries, maxTransitionEntries)
+	return newIncidentRepository(database, maxEntries, maxArchiveEntries, maxTransitionEntries, 0)
 }
 
-func newIncidentRepository(database *sql.DB, maxEntries, maxArchiveEntries, maxTransitionEntries int) (*IncidentRepository, error) {
+// NewIncidentRepositoryWithNotificationOutbox atomically persists transitions
+// and notification intents within independent explicit capacities.
+func NewIncidentRepositoryWithNotificationOutbox(database *sql.DB, maxEntries, maxArchiveEntries, maxTransitionEntries, maxIntentEntries int) (*IncidentRepository, error) {
+	if maxTransitionEntries < 1 || maxIntentEntries < 1 {
+		return nil, errors.New("positive Incident transition and notification intent capacities are required")
+	}
+	return newIncidentRepository(database, maxEntries, maxArchiveEntries, maxTransitionEntries, maxIntentEntries)
+}
+
+func newIncidentRepository(database *sql.DB, maxEntries, maxArchiveEntries, maxTransitionEntries, maxIntentEntries int) (*IncidentRepository, error) {
 	if database == nil || maxEntries < 1 || maxArchiveEntries < 1 {
 		return nil, errors.New("core database and positive Incident current and archive capacities are required")
 	}
-	return &IncidentRepository{database: database, maxEntries: maxEntries, maxArchiveEntries: maxArchiveEntries, maxTransitionEntries: maxTransitionEntries}, nil
+	return &IncidentRepository{database: database, maxEntries: maxEntries, maxArchiveEntries: maxArchiveEntries, maxTransitionEntries: maxTransitionEntries, maxIntentEntries: maxIntentEntries}, nil
 }
 
 // ListArchives returns newest superseded revisions first with an explicit limit.
@@ -294,6 +305,17 @@ func (r *IncidentRepository) Advance(ctx context.Context, rule alerts.Rule, resu
 		if _, err := transaction.ExecContext(ctx, `INSERT INTO incident_transitions (event_id, device_id, rule_id, rule_revision, occurred_at, from_status, to_status, transition_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, transition.ID, transition.DeviceID, transition.RuleID, transition.RuleRevision, storageTimestamp(transition.OccurredAt), transition.FromStatus, transition.ToStatus, encoded); err != nil {
 			return alerts.IncidentState{}, fmt.Errorf("insert Incident transition: %w", err)
 		}
+		if r.maxIntentEntries > 0 {
+			intent, planned, err := notifications.Plan(transition, rule.Severity)
+			if err != nil {
+				return alerts.IncidentState{}, err
+			}
+			if planned {
+				if err := insertNotificationIntent(ctx, transaction, intent, r.maxIntentEntries); err != nil {
+					return alerts.IncidentState{}, err
+				}
+			}
+		}
 	}
 	if !exists {
 		var count int
@@ -320,6 +342,27 @@ func (r *IncidentRepository) Advance(ctx context.Context, rule alerts.Rule, resu
 		return alerts.IncidentState{}, fmt.Errorf("commit Incident transition: %w", err)
 	}
 	return next, nil
+}
+
+func insertNotificationIntent(ctx context.Context, transaction *sql.Tx, intent notifications.Intent, maxEntries int) error {
+	if err := notifications.ValidateIntent(intent); err != nil {
+		return err
+	}
+	var count int
+	if err := transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM notification_intent_outbox`).Scan(&count); err != nil {
+		return fmt.Errorf("count notification intents: %w", err)
+	}
+	if count >= maxEntries {
+		return notifications.ErrIntentCapacity
+	}
+	encoded, err := json.Marshal(intent)
+	if err != nil {
+		return fmt.Errorf("encode notification intent: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, `INSERT INTO notification_intent_outbox (intent_id, transition_id, device_id, rule_id, rule_revision, kind, delivery_policy, created_at, intent_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, intent.ID, intent.TransitionID, intent.DeviceID, intent.RuleID, intent.RuleRevision, intent.Kind, intent.DeliveryPolicy, storageTimestamp(intent.CreatedAt), encoded); err != nil {
+		return fmt.Errorf("insert notification intent: %w", err)
+	}
+	return nil
 }
 
 func decodeIncidentState(encoded []byte) (alerts.IncidentState, error) {

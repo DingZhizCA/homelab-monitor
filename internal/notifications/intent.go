@@ -15,6 +15,8 @@ import (
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
 )
 
+var ErrIntentCapacity = errors.New("notification intent outbox capacity reached")
+
 type IntentKind string
 
 const (

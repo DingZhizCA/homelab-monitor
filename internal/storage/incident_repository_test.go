@@ -16,6 +16,7 @@ import (
 	"github.com/DingZhizCA/homelab-monitor/internal/audit"
 	"github.com/DingZhizCA/homelab-monitor/internal/auth"
 	"github.com/DingZhizCA/homelab-monitor/internal/dashboard"
+	"github.com/DingZhizCA/homelab-monitor/internal/notifications"
 	"github.com/DingZhizCA/homelab-monitor/internal/testutil"
 )
 
@@ -206,6 +207,43 @@ func TestIncidentRepositoryPersistsStatusChangesAtomicallyWithinCapacity(t *test
 	listed, err := repository.ListTransitions(context.Background(), rule.DeviceID, rule.ID, 1)
 	if err != nil || len(listed) != 1 || listed[0].ID != transition.ID {
 		t.Fatalf("listed transitions=%+v err=%v", listed, err)
+	}
+}
+
+func TestIncidentRepositoryPersistsNotificationIntentAtomically(t *testing.T) {
+	databases := openTestDatabases(t)
+	repository, err := NewIncidentRepositoryWithNotificationOutbox(databases.Core, 1, 1, 3, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 10, 26, 14, 0, 0, 0, time.UTC)
+	rule := storedIncidentRule(1)
+	policy := storedIncidentPolicy()
+	firing, err := repository.Advance(context.Background(), rule, storedIncidentResult(1, alerts.StateTrue), base, policy, time.Time{})
+	if err != nil || firing.Status != alerts.IncidentFiring {
+		t.Fatalf("firing=%+v err=%v", firing, err)
+	}
+	var encoded []byte
+	if err := databases.Core.QueryRow(`SELECT intent_json FROM notification_intent_outbox`).Scan(&encoded); err != nil {
+		t.Fatal(err)
+	}
+	var intent notifications.Intent
+	if err := json.Unmarshal(encoded, &intent); err != nil || notifications.ValidateIntent(intent) != nil || intent.Kind != notifications.IntentFiring || intent.Severity != rule.Severity {
+		t.Fatalf("stored intent=%+v decode_err=%v", intent, err)
+	}
+	if _, err := repository.Advance(context.Background(), rule, storedIncidentResult(1, alerts.StateFalse), base.Add(time.Second), policy, base); !errors.Is(err, notifications.ErrIntentCapacity) {
+		t.Fatalf("notification capacity error=%v", err)
+	}
+	current, found, err := repository.Current(context.Background(), rule.DeviceID, rule.ID)
+	if err != nil || !found || current != firing {
+		t.Fatalf("capacity failure changed current=%+v found=%t err=%v", current, found, err)
+	}
+	var transitions, intents int
+	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM incident_transitions`).Scan(&transitions); err != nil || transitions != 1 {
+		t.Fatalf("transition count=%d err=%v", transitions, err)
+	}
+	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM notification_intent_outbox`).Scan(&intents); err != nil || intents != 1 {
+		t.Fatalf("intent count=%d err=%v", intents, err)
 	}
 }
 
