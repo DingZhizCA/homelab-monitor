@@ -6,16 +6,25 @@ no wildcard matching, implicit role recipient, or sampling behavior.
 package notifications
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
+	"github.com/DingZhizCA/homelab-monitor/internal/audit"
 )
 
 var (
-	ErrInvalidSubscription = errors.New("invalid notification subscription")
-	ErrRecipientCapacity   = errors.New("notification recipient capacity reached")
+	ErrInvalidSubscription  = errors.New("invalid notification subscription")
+	ErrSubscriptionConflict = errors.New("notification subscription revision conflict")
+	ErrSubscriptionCapacity = errors.New("notification subscription capacity reached")
+	ErrRecipientCapacity    = errors.New("notification recipient capacity reached")
+)
+
+const (
+	SubscriptionAuditAction  = "notification.subscription.save"
+	SubscriptionResourceType = "notification_subscription"
 )
 
 type Channels struct {
@@ -37,6 +46,19 @@ type Subscription struct {
 type Recipient struct {
 	UserID   string   `json:"user_id"`
 	Channels Channels `json:"channels"`
+}
+
+type SubscriptionRepository interface {
+	ListForUser(ctx context.Context, userID string, limit int) ([]Subscription, error)
+	SaveWithAudit(ctx context.Context, actorID string, subscription Subscription, expectedRevision uint64, event audit.Event) error
+}
+
+type RecipientSource interface {
+	Recipients(ctx context.Context, intent Intent, limit int) ([]Recipient, error)
+}
+
+func SubscriptionResourceID(subscription Subscription) string {
+	return strings.Join([]string{subscription.UserID, subscription.DeviceID, subscription.RuleID, string(subscription.Severity)}, "/")
 }
 
 func ValidateSubscription(subscription Subscription) error {
