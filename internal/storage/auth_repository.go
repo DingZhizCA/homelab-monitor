@@ -223,6 +223,30 @@ var coreMigrations = []Migration{
 	CREATE INDEX notification_subscriptions_match
 		ON notification_subscriptions (device_id, rule_id, severity, enabled, user_id);`,
 	},
+	{
+		Version: 12,
+		Name:    "recipient_notifications",
+		SQL: `CREATE TABLE recipient_notifications (
+		notification_id TEXT PRIMARY KEY,
+		intent_id TEXT NOT NULL,
+		user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+		device_id TEXT NOT NULL,
+		rule_id TEXT NOT NULL,
+		rule_revision INTEGER NOT NULL CHECK (rule_revision > 0),
+		severity TEXT NOT NULL CHECK (severity IN ('critical', 'warning', 'info')),
+		kind TEXT NOT NULL CHECK (kind IN ('firing', 'recovery')),
+		in_app INTEGER NOT NULL CHECK (in_app IN (0, 1)),
+		push_enabled INTEGER NOT NULL CHECK (push_enabled IN (0, 1)),
+		created_at TEXT NOT NULL,
+		read_at TEXT,
+		notification_json BLOB NOT NULL,
+		UNIQUE (intent_id, user_id)
+	);
+	CREATE INDEX recipient_notifications_user_time
+		ON recipient_notifications (user_id, in_app, created_at DESC, notification_id DESC);
+	CREATE INDEX recipient_notifications_push
+		ON recipient_notifications (push_enabled, created_at, notification_id);`,
+	},
 }
 
 // AuthRepository implements the auth user and session persistence boundaries.
