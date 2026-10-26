@@ -25,7 +25,7 @@ func TestNotificationOutboxRepositoryReadsAndAcknowledgesOldestIntent(t *testing
 	if _, err := incidents.Advance(context.Background(), rule, storedIncidentResult(1, alerts.StateTrue), base, storedIncidentPolicy(), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	outbox, err := NewNotificationOutboxRepository(databases.Core, 1, 2)
+	outbox, err := NewNotificationOutboxRepository(databases.Core, 1, 2, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestNotificationOutboxRepositoryRejectsCorruptStoredIdentity(t *testing.T) 
 	if _, err := databases.Core.Exec(`UPDATE notification_intent_outbox SET rule_id = 'other'`); err != nil {
 		t.Fatal(err)
 	}
-	outbox, err := NewNotificationOutboxRepository(databases.Core, 1, 1)
+	outbox, err := NewNotificationOutboxRepository(databases.Core, 1, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestNotificationOutboxRepositoryDefersAndDeadLettersAtomically(t *testing.T
 	if _, err := incidents.Advance(context.Background(), storedIncidentRule(1), storedIncidentResult(1, alerts.StateTrue), createdAt, storedIncidentPolicy(), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	outbox, err := NewNotificationOutboxRepository(databases.Core, 1, 1)
+	outbox, err := NewNotificationOutboxRepository(databases.Core, 1, 1, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,5 +117,28 @@ func TestNotificationOutboxRepositoryDefersAndDeadLettersAtomically(t *testing.T
 	var lastError string
 	if err := databases.Core.QueryRow(`SELECT attempt_count, last_error FROM notification_intent_dead_letters WHERE intent_id = ?`, terminal.IntentID).Scan(&attempts, &lastError); err != nil || attempts != 2 || lastError != terminal.LastError {
 		t.Fatalf("dead letter attempts=%d error=%q query=%v", attempts, lastError, err)
+	}
+	letters, err := outbox.ListDeadLetters(context.Background(), 1)
+	if err != nil || len(letters) != 1 || letters[0].Intent.ID != terminal.IntentID || letters[0].AttemptCount != 2 {
+		t.Fatalf("dead letters=%+v err=%v", letters, err)
+	}
+	if err := outbox.RequeueDeadLetter(context.Background(), terminal.IntentID); err != nil {
+		t.Fatal(err)
+	}
+	items, err = outbox.Pending(context.Background(), deferredUntil, 1)
+	if err != nil || len(items) != 1 || items[0].AttemptCount != 0 {
+		t.Fatalf("requeued pending=%+v err=%v", items, err)
+	}
+	terminal = notifications.Failure{IntentID: items[0].Intent.ID, AttemptCount: 1, FailedAt: deferredUntil.Add(time.Minute), LastError: "terminal again", DeadLetter: true}
+	if err := outbox.RecordFailure(context.Background(), terminal); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := outbox.DeleteDeadLettersBefore(context.Background(), terminal.FailedAt.Add(time.Nanosecond), 1)
+	if err != nil || deleted != 1 {
+		t.Fatalf("deleted=%d err=%v", deleted, err)
+	}
+	letters, err = outbox.ListDeadLetters(context.Background(), 1)
+	if err != nil || len(letters) != 0 {
+		t.Fatalf("dead letters after retention=%+v err=%v", letters, err)
 	}
 }
