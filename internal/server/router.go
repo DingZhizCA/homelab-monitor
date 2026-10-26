@@ -13,22 +13,23 @@ import (
 
 // RouterOptions contains already-constructed application handlers for routing.
 type RouterOptions struct {
-	API                 *Handler
-	PluginControl       *PluginControlHandler
-	PluginArtifacts     *PluginArtifactHandler
-	PluginAdmin         *PluginAdminHandler
-	CollectionPolicies  *PluginCollectionPolicyHandler
-	Auth                *AuthHandler
-	Dashboards          *DashboardHandler
-	MetricQueries       *MetricQueryHandler
-	MetricHistory       *MetricHistoryHandler
-	PluginMetricHistory *PluginMetricHistoryHandler
-	PluginMetricCatalog *PluginMetricCatalogHandler
-	MetricsBatch        *MetricsBatchHandler
-	PluginMetricsBatch  *PluginMetricsBatchHandler
-	AlertRules          *AlertRuleHandler
-	Incidents           *IncidentHandler
-	WebDirectory        string
+	API                       *Handler
+	PluginControl             *PluginControlHandler
+	PluginArtifacts           *PluginArtifactHandler
+	PluginAdmin               *PluginAdminHandler
+	CollectionPolicies        *PluginCollectionPolicyHandler
+	Auth                      *AuthHandler
+	Dashboards                *DashboardHandler
+	MetricQueries             *MetricQueryHandler
+	MetricHistory             *MetricHistoryHandler
+	PluginMetricHistory       *PluginMetricHistoryHandler
+	PluginMetricCatalog       *PluginMetricCatalogHandler
+	MetricsBatch              *MetricsBatchHandler
+	PluginMetricsBatch        *PluginMetricsBatchHandler
+	AlertRules                *AlertRuleHandler
+	Incidents                 *IncidentHandler
+	NotificationSubscriptions *NotificationSubscriptionHandler
+	WebDirectory              string
 }
 
 // NewRouter registers the stable HTTP API and an optional Dashboard handler.
@@ -68,6 +69,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 	}
 	if options.Incidents != nil && (options.Auth == nil || options.Incidents.auth != options.Auth) {
 		return nil, errors.New("Incident routes require the matching human authentication handler")
+	}
+	if options.NotificationSubscriptions != nil && (options.Auth == nil || options.NotificationSubscriptions.auth != options.Auth) {
+		return nil, errors.New("notification subscription routes require the matching human authentication handler")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", options.API.Health)
@@ -138,6 +142,9 @@ func NewRouter(options RouterOptions) (http.Handler, error) {
 			mux.Handle("/api/v1/alerts/incidents/transitions", options.Auth.RequireUser(http.HandlerFunc(options.Incidents.Transitions)))
 		}
 		mux.Handle("/api/v1/owner/alerts/incidents/activate", options.Auth.RequireOwnerMutation(http.HandlerFunc(options.Incidents.Activate)))
+	}
+	if options.NotificationSubscriptions != nil {
+		mux.Handle("/api/v1/notifications/subscriptions", options.Auth.RequireUser(http.HandlerFunc(options.NotificationSubscriptions.Collection)))
 	}
 	if options.WebDirectory != "" {
 		mux.Handle("/", NewSPAHandler(options.WebDirectory))
