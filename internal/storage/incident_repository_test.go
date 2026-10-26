@@ -6,6 +6,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -166,6 +167,41 @@ func TestIncidentRepositoryEnforcesCASCapacityAndRevisionIsolation(t *testing.T)
 	newRevision := storedIncidentRule(2)
 	if _, err := repository.Advance(context.Background(), newRevision, storedIncidentResult(2, alerts.StateTrue), base.Add(time.Second), policy, base); !errors.Is(err, alerts.ErrIncidentRevision) {
 		t.Fatalf("revision error=%v", err)
+	}
+}
+
+func TestIncidentRepositoryPersistsStatusChangesAtomicallyWithinCapacity(t *testing.T) {
+	databases := openTestDatabases(t)
+	repository, err := NewIncidentRepositoryWithTransitions(databases.Core, 1, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC)
+	rule := storedIncidentRule(1)
+	policy := storedIncidentPolicy()
+	firing, err := repository.Advance(context.Background(), rule, storedIncidentResult(1, alerts.StateTrue), base, policy, time.Time{})
+	if err != nil || firing.Status != alerts.IncidentFiring {
+		t.Fatalf("firing=%+v err=%v", firing, err)
+	}
+	held, err := repository.Advance(context.Background(), rule, storedIncidentResult(1, alerts.StateTrue), base.Add(time.Second), policy, base)
+	if err != nil || held.Status != alerts.IncidentFiring {
+		t.Fatalf("held=%+v err=%v", held, err)
+	}
+	if _, err := repository.Advance(context.Background(), rule, storedIncidentResult(1, alerts.StateFalse), base.Add(2*time.Second), policy, held.LastEvaluatedAt); !errors.Is(err, alerts.ErrIncidentTransitionCapacity) {
+		t.Fatalf("transition capacity error=%v", err)
+	}
+	current, found, err := repository.Current(context.Background(), rule.DeviceID, rule.ID)
+	if err != nil || !found || current != held {
+		t.Fatalf("capacity failure changed current=%+v found=%t err=%v", current, found, err)
+	}
+	var count int
+	var encoded []byte
+	if err := databases.Core.QueryRow(`SELECT COUNT(*), transition_json FROM incident_transitions`).Scan(&count, &encoded); err != nil || count != 1 {
+		t.Fatalf("transition count=%d err=%v", count, err)
+	}
+	var transition alerts.IncidentTransition
+	if err := json.Unmarshal(encoded, &transition); err != nil || alerts.ValidateIncidentTransition(transition) != nil || transition.ToStatus != alerts.IncidentFiring {
+		t.Fatalf("stored transition=%+v decode_err=%v", transition, err)
 	}
 }
 

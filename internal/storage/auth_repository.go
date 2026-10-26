@@ -170,6 +170,24 @@ var coreMigrations = []Migration{
 		SQL: `CREATE INDEX incident_archives_superseded_at
 		ON incident_revision_archives (superseded_at, device_id, rule_id, rule_revision);`,
 	},
+	{
+		Version: 9,
+		Name:    "incident_transitions",
+		SQL: `CREATE TABLE incident_transitions (
+		event_id TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL,
+		rule_id TEXT NOT NULL,
+		rule_revision INTEGER NOT NULL CHECK (rule_revision > 0),
+		occurred_at TEXT NOT NULL,
+		from_status TEXT NOT NULL,
+		to_status TEXT NOT NULL,
+		transition_json BLOB NOT NULL
+	);
+	CREATE INDEX incident_transitions_rule_time
+		ON incident_transitions (device_id, rule_id, occurred_at DESC, event_id DESC);
+	CREATE INDEX incident_transitions_retention
+		ON incident_transitions (occurred_at, event_id);`,
+	},
 }
 
 // AuthRepository implements the auth user and session persistence boundaries.

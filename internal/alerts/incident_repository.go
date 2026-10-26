@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	ErrIncidentVersionConflict = errors.New("incident state version conflict")
-	ErrIncidentCapacity        = errors.New("incident repository capacity reached")
+	ErrIncidentVersionConflict    = errors.New("incident state version conflict")
+	ErrIncidentCapacity           = errors.New("incident repository capacity reached")
+	ErrIncidentTransitionCapacity = errors.New("incident transition history capacity reached")
 )
 
 // IncidentRepository stores current state with timestamp compare-and-swap.

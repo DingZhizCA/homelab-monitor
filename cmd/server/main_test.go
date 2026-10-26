@@ -333,14 +333,14 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	alertEvaluation, err := buildAlertEvaluationRuntime(databases, humanAuth, store,
 		alertRuleRuntimeConfig{maxBodyBytes: 1 << 20, maxDepth: 4, maxConditions: 8},
 		alertEvaluationRuntimeConfig{
-			enabled: true, interval: time.Hour, timeout: time.Second, maxRulesPerRun: 10, maxIncidentStates: 10, maxIncidentArchives: 20,
+			enabled: true, interval: time.Hour, timeout: time.Second, maxRulesPerRun: 10, maxIncidentStates: 10, maxIncidentArchives: 20, maxIncidentTransitions: 40,
 			archiveCleanupInterval: time.Hour, archiveRetention: 24 * time.Hour, archiveCleanupLimit: 2, archiveCleanupTimeout: time.Second,
 			pendingFor: &zero, recoveryFor: &zero, unknownBehavior: alerts.UncertainHold, disabledBehavior: alerts.UncertainHold,
 		})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if alertEvaluation.archiveRetention == nil {
+	if alertEvaluation.historyRetention == nil {
 		t.Fatal("configured Incident archive retention was not assembled")
 	}
 	artifactDirectory := filepath.Join(testutil.TempDir(t), "artifacts")

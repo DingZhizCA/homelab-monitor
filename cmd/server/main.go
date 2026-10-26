@@ -126,10 +126,11 @@ func run() error {
 	alertEvaluationMaxRules := flag.Int("alert-evaluation-max-rules", 0, "maximum rules evaluated in one run")
 	incidentMaxStates := flag.Int("incident-max-states", 0, "maximum current Incident states retained")
 	incidentMaxArchives := flag.Int("incident-history-max-records", 0, "maximum superseded Incident revisions retained")
-	incidentHistoryCleanupInterval := flag.Duration("incident-history-cleanup-interval", 0, "optional interval between bounded superseded Incident cleanup passes")
-	incidentHistoryRetention := flag.Duration("incident-history-retention", 0, "optional age after which superseded Incident revisions may be deleted")
-	incidentHistoryCleanupLimit := flag.Int("incident-history-cleanup-delete-limit", 0, "optional maximum superseded Incident revisions deleted per cleanup pass")
-	incidentHistoryCleanupTimeout := flag.Duration("incident-history-cleanup-timeout", 0, "optional timeout for one superseded Incident cleanup pass")
+	incidentMaxTransitions := flag.Int("incident-transition-max-records", 0, "optional maximum status-change events retained; requires Incident history cleanup")
+	incidentHistoryCleanupInterval := flag.Duration("incident-history-cleanup-interval", 0, "optional interval between bounded Incident history cleanup passes")
+	incidentHistoryRetention := flag.Duration("incident-history-retention", 0, "optional age after which superseded revisions and status changes may be deleted")
+	incidentHistoryCleanupLimit := flag.Int("incident-history-cleanup-delete-limit", 0, "optional maximum records deleted from each Incident history collection per pass")
+	incidentHistoryCleanupTimeout := flag.Duration("incident-history-cleanup-timeout", 0, "optional timeout for one Incident history cleanup pass")
 	var incidentPendingFor, incidentRecoveryFor explicitDurationFlag
 	flag.Var(&incidentPendingFor, "incident-pending-for", "continuous true duration before firing; explicitly set 0s for immediate")
 	flag.Var(&incidentRecoveryFor, "incident-recovery-for", "continuous false duration before resolving; explicitly set 0s for immediate")
@@ -321,7 +322,7 @@ func run() error {
 		maxBodyBytes: *alertRuleMaxBodyBytes, maxDepth: *alertRuleMaxDepth, maxConditions: *alertRuleMaxConditions,
 	}, alertEvaluationRuntimeConfig{
 		enabled: *alertEvaluationEnabled, interval: *alertEvaluationInterval, timeout: *alertEvaluationTimeout,
-		maxRulesPerRun: *alertEvaluationMaxRules, maxIncidentStates: *incidentMaxStates, maxIncidentArchives: *incidentMaxArchives,
+		maxRulesPerRun: *alertEvaluationMaxRules, maxIncidentStates: *incidentMaxStates, maxIncidentArchives: *incidentMaxArchives, maxIncidentTransitions: *incidentMaxTransitions,
 		archiveCleanupInterval: *incidentHistoryCleanupInterval, archiveRetention: *incidentHistoryRetention,
 		archiveCleanupLimit: *incidentHistoryCleanupLimit, archiveCleanupTimeout: *incidentHistoryCleanupTimeout,
 		pendingFor: incidentPendingFor.pointer(), recoveryFor: incidentRecoveryFor.pointer(),
@@ -454,11 +455,11 @@ func run() error {
 			cancelAlerts()
 			<-alertDone
 		}()
-		if alertEvaluation.archiveRetention != nil {
+		if alertEvaluation.historyRetention != nil {
 			retentionContext, cancelRetention := context.WithCancel(ctx)
 			retentionDone := make(chan struct{})
 			go func() {
-				alertEvaluation.archiveRetention.Run(retentionContext)
+				alertEvaluation.historyRetention.Run(retentionContext)
 				close(retentionDone)
 			}()
 			defer func() {

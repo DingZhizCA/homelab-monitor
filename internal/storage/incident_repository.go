@@ -19,9 +19,10 @@ import (
 
 // IncidentRepository stores bounded current Incident state in core.db.
 type IncidentRepository struct {
-	database          *sql.DB
-	maxEntries        int
-	maxArchiveEntries int
+	database             *sql.DB
+	maxEntries           int
+	maxArchiveEntries    int
+	maxTransitionEntries int
 }
 
 var _ alerts.IncidentRepository = (*IncidentRepository)(nil)
@@ -30,10 +31,22 @@ var _ alerts.IncidentArchiveSource = (*IncidentRepository)(nil)
 
 // NewIncidentRepository requires explicit current-state and archive capacities.
 func NewIncidentRepository(database *sql.DB, maxEntries, maxArchiveEntries int) (*IncidentRepository, error) {
+	return newIncidentRepository(database, maxEntries, maxArchiveEntries, 0)
+}
+
+// NewIncidentRepositoryWithTransitions also persists bounded status changes.
+func NewIncidentRepositoryWithTransitions(database *sql.DB, maxEntries, maxArchiveEntries, maxTransitionEntries int) (*IncidentRepository, error) {
+	if maxTransitionEntries < 1 {
+		return nil, errors.New("positive Incident transition capacity is required")
+	}
+	return newIncidentRepository(database, maxEntries, maxArchiveEntries, maxTransitionEntries)
+}
+
+func newIncidentRepository(database *sql.DB, maxEntries, maxArchiveEntries, maxTransitionEntries int) (*IncidentRepository, error) {
 	if database == nil || maxEntries < 1 || maxArchiveEntries < 1 {
 		return nil, errors.New("core database and positive Incident current and archive capacities are required")
 	}
-	return &IncidentRepository{database: database, maxEntries: maxEntries, maxArchiveEntries: maxArchiveEntries}, nil
+	return &IncidentRepository{database: database, maxEntries: maxEntries, maxArchiveEntries: maxArchiveEntries, maxTransitionEntries: maxTransitionEntries}, nil
 }
 
 // ListArchives returns newest superseded revisions first with an explicit limit.
@@ -229,6 +242,26 @@ func (r *IncidentRepository) Advance(ctx context.Context, rule alerts.Rule, resu
 	nextJSON, err := json.Marshal(next)
 	if err != nil {
 		return alerts.IncidentState{}, fmt.Errorf("encode Incident state: %w", err)
+	}
+	transition, changed, err := alerts.BuildIncidentTransition(current, exists, next)
+	if err != nil {
+		return alerts.IncidentState{}, err
+	}
+	if changed && r.maxTransitionEntries > 0 {
+		var count int
+		if err := transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM incident_transitions`).Scan(&count); err != nil {
+			return alerts.IncidentState{}, fmt.Errorf("count Incident transitions: %w", err)
+		}
+		if count >= r.maxTransitionEntries {
+			return alerts.IncidentState{}, alerts.ErrIncidentTransitionCapacity
+		}
+		encoded, err := json.Marshal(transition)
+		if err != nil {
+			return alerts.IncidentState{}, fmt.Errorf("encode Incident transition: %w", err)
+		}
+		if _, err := transaction.ExecContext(ctx, `INSERT INTO incident_transitions (event_id, device_id, rule_id, rule_revision, occurred_at, from_status, to_status, transition_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, transition.ID, transition.DeviceID, transition.RuleID, transition.RuleRevision, storageTimestamp(transition.OccurredAt), transition.FromStatus, transition.ToStatus, encoded); err != nil {
+			return alerts.IncidentState{}, fmt.Errorf("insert Incident transition: %w", err)
+		}
 	}
 	if !exists {
 		var count int

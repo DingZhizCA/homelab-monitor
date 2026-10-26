@@ -180,6 +180,7 @@ type alertEvaluationRuntimeConfig struct {
 	maxRulesPerRun         int
 	maxIncidentStates      int
 	maxIncidentArchives    int
+	maxIncidentTransitions int
 	archiveCleanupInterval time.Duration
 	archiveRetention       time.Duration
 	archiveCleanupLimit    int
@@ -193,11 +194,11 @@ type alertEvaluationRuntimeConfig struct {
 type alertEvaluationRuntime struct {
 	engine           *alerts.Engine
 	incidents        *server.IncidentHandler
-	archiveRetention *storage.IncidentArchiveRetentionManager
+	historyRetention *storage.IncidentHistoryRetentionManager
 }
 
 func (c alertEvaluationRuntimeConfig) disabled() bool {
-	return !c.enabled && c.interval == 0 && c.timeout == 0 && c.maxRulesPerRun == 0 && c.maxIncidentStates == 0 && c.maxIncidentArchives == 0 && c.archiveCleanupInterval == 0 && c.archiveRetention == 0 && c.archiveCleanupLimit == 0 && c.archiveCleanupTimeout == 0 && c.pendingFor == nil && c.recoveryFor == nil && c.unknownBehavior == "" && c.disabledBehavior == ""
+	return !c.enabled && c.interval == 0 && c.timeout == 0 && c.maxRulesPerRun == 0 && c.maxIncidentStates == 0 && c.maxIncidentArchives == 0 && c.maxIncidentTransitions == 0 && c.archiveCleanupInterval == 0 && c.archiveRetention == 0 && c.archiveCleanupLimit == 0 && c.archiveCleanupTimeout == 0 && c.pendingFor == nil && c.recoveryFor == nil && c.unknownBehavior == "" && c.disabledBehavior == ""
 }
 
 type pluginRuntimeConfig struct {
@@ -614,7 +615,16 @@ func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRu
 	if err != nil {
 		return nil, err
 	}
-	incidents, err := storage.NewIncidentRepository(databases.Core, config.maxIncidentStates, config.maxIncidentArchives)
+	cleanupComplete := config.archiveCleanupInterval > 0 && config.archiveRetention > 0 && config.archiveCleanupLimit > 0 && config.archiveCleanupTimeout > 0
+	if config.maxIncidentTransitions > 0 && !cleanupComplete {
+		return nil, errors.New("Incident transition history requires complete positive history retention settings")
+	}
+	var incidents *storage.IncidentRepository
+	if config.maxIncidentTransitions > 0 {
+		incidents, err = storage.NewIncidentRepositoryWithTransitions(databases.Core, config.maxIncidentStates, config.maxIncidentArchives, config.maxIncidentTransitions)
+	} else {
+		incidents, err = storage.NewIncidentRepository(databases.Core, config.maxIncidentStates, config.maxIncidentArchives)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -649,26 +659,26 @@ func buildAlertEvaluationRuntime(databases *storage.Databases, humanAuth *authRu
 	if err != nil {
 		return nil, err
 	}
-	var archiveRetention *storage.IncidentArchiveRetentionManager
+	var historyRetention *storage.IncidentHistoryRetentionManager
 	cleanupConfigured := config.archiveCleanupInterval != 0 || config.archiveRetention != 0 || config.archiveCleanupLimit != 0 || config.archiveCleanupTimeout != 0
 	if cleanupConfigured {
-		archiveRetention, err = storage.NewIncidentArchiveRetentionManager(databases.Core, storage.IncidentArchiveRetentionConfig{
+		historyRetention, err = storage.NewIncidentHistoryRetentionManager(databases.Core, storage.IncidentHistoryRetentionConfig{
 			Interval: config.archiveCleanupInterval, Retention: config.archiveRetention,
 			DeleteLimit: config.archiveCleanupLimit, Timeout: config.archiveCleanupTimeout,
-		}, logIncidentArchiveRetentionObservation)
+		}, logIncidentHistoryRetentionObservation)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return &alertEvaluationRuntime{engine: engine, incidents: handler, archiveRetention: archiveRetention}, nil
+	return &alertEvaluationRuntime{engine: engine, incidents: handler, historyRetention: historyRetention}, nil
 }
 
-func logIncidentArchiveRetentionObservation(observation storage.IncidentArchiveRetentionObservation) {
+func logIncidentHistoryRetentionObservation(observation storage.IncidentHistoryRetentionObservation) {
 	if observation.Err != nil {
-		log.Printf("component=alerts level=ERROR cutoff=%q deleted=%d duration=%q error=%q msg=%q", observation.Cutoff, observation.Deleted, observation.Duration, observation.Err, "bounded Incident archive retention failed")
+		log.Printf("component=alerts level=ERROR cutoff=%q deleted_archives=%d deleted_transitions=%d duration=%q error=%q msg=%q", observation.Cutoff, observation.DeletedArchives, observation.DeletedTransitions, observation.Duration, observation.Err, "bounded Incident history retention failed")
 		return
 	}
-	log.Printf("component=alerts level=INFO cutoff=%q deleted=%d duration=%q msg=%q", observation.Cutoff, observation.Deleted, observation.Duration, "bounded Incident archive retention completed")
+	log.Printf("component=alerts level=INFO cutoff=%q deleted_archives=%d deleted_transitions=%d duration=%q msg=%q", observation.Cutoff, observation.DeletedArchives, observation.DeletedTransitions, observation.Duration, "bounded Incident history retention completed")
 }
 
 func logAlertEvaluationObservation(observation alerts.EngineObservation) {
