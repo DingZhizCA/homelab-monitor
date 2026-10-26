@@ -26,6 +26,7 @@ type IncidentRepository struct {
 
 var _ alerts.IncidentRepository = (*IncidentRepository)(nil)
 var _ alerts.IncidentActivationRepository = (*IncidentRepository)(nil)
+var _ alerts.IncidentArchiveSource = (*IncidentRepository)(nil)
 
 // NewIncidentRepository requires explicit current-state and archive capacities.
 func NewIncidentRepository(database *sql.DB, maxEntries, maxArchiveEntries int) (*IncidentRepository, error) {
@@ -33,6 +34,34 @@ func NewIncidentRepository(database *sql.DB, maxEntries, maxArchiveEntries int) 
 		return nil, errors.New("core database and positive Incident current and archive capacities are required")
 	}
 	return &IncidentRepository{database: database, maxEntries: maxEntries, maxArchiveEntries: maxArchiveEntries}, nil
+}
+
+// ListArchives returns newest superseded revisions first with an explicit limit.
+func (r *IncidentRepository) ListArchives(ctx context.Context, deviceID, ruleID string, limit int) ([]alerts.IncidentArchive, error) {
+	if err := validateIncidentIdentity(deviceID, ruleID); err != nil || limit < 1 || limit > r.maxArchiveEntries {
+		return nil, alerts.ErrInvalidIncidentRequest
+	}
+	rows, err := r.database.QueryContext(ctx, `SELECT archive_json FROM incident_revision_archives WHERE device_id = ? AND rule_id = ? ORDER BY rule_revision DESC LIMIT ?`, deviceID, ruleID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list Incident archives: %w", err)
+	}
+	defer rows.Close()
+	archives := make([]alerts.IncidentArchive, 0)
+	for rows.Next() {
+		var encoded []byte
+		if err := rows.Scan(&encoded); err != nil {
+			return nil, fmt.Errorf("scan Incident archive: %w", err)
+		}
+		archive, err := decodeIncidentArchive(encoded)
+		if err != nil {
+			return nil, err
+		}
+		archives = append(archives, archive)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Incident archives: %w", err)
+	}
+	return archives, nil
 }
 
 // ActivateRuleRevisionWithAudit archives an older current state and clears it atomically.
@@ -237,6 +266,17 @@ func decodeIncidentState(encoded []byte) (alerts.IncidentState, error) {
 		return alerts.IncidentState{}, fmt.Errorf("validate stored Incident state: %w", err)
 	}
 	return state, nil
+}
+
+func decodeIncidentArchive(encoded []byte) (alerts.IncidentArchive, error) {
+	var archive alerts.IncidentArchive
+	if err := json.Unmarshal(encoded, &archive); err != nil {
+		return alerts.IncidentArchive{}, fmt.Errorf("decode stored Incident archive: %w", err)
+	}
+	if err := alerts.ValidateIncidentState(archive.State); err != nil || archive.Disposition != alerts.IncidentArchiveSuperseded || archive.SupersededByRevision <= archive.State.RuleRevision || archive.SupersededAt.IsZero() {
+		return alerts.IncidentArchive{}, errors.New("stored Incident archive is invalid")
+	}
+	return archive, nil
 }
 
 func validateIncidentIdentity(deviceID, ruleID string) error {

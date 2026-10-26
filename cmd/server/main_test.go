@@ -475,6 +475,13 @@ func TestBuildRuntimesConnectAuthMetricsAndPluginControlRoutes(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ready":true`) || !strings.Contains(response.Body.String(), `"superseded_by_revision":2`) {
 		t.Fatalf("Incident activation status=%d body=%s", response.Code, response.Body.String())
 	}
+	request = httptest.NewRequest(http.MethodGet, "https://monitor.example/api/v1/alerts/incidents/history?device_id=node-a&rule_id=high-cpu&limit=1", nil)
+	request.AddCookie(cookies[0])
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"rule_revision":1`) || !strings.Contains(response.Body.String(), `"disposition":"superseded"`) || !strings.Contains(response.Body.String(), `"superseded_by_revision":2`) {
+		t.Fatalf("Incident archive query status=%d body=%s", response.Code, response.Body.String())
+	}
 	activatedSummary := alertEvaluation.engine.RunOnce(context.Background())
 	if activatedSummary.Succeeded != 1 || activatedSummary.Failed != 0 {
 		t.Fatalf("activated revision evaluation summary=%+v", activatedSummary)

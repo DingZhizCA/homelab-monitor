@@ -48,6 +48,49 @@ type IncidentActivationRepository interface {
 	ActivateRuleRevisionWithAudit(context.Context, string, string, string, uint64, audit.Event) (IncidentActivationResult, error)
 }
 
+// IncidentArchiveSource reads bounded superseded revision history.
+type IncidentArchiveSource interface {
+	ListArchives(context.Context, string, string, int) ([]IncidentArchive, error)
+}
+
+// IncidentArchiveService authorizes bounded archive reads.
+type IncidentArchiveService struct {
+	source   IncidentArchiveSource
+	maxLimit int
+}
+
+// NewIncidentArchiveService requires a source and explicit per-query limit.
+func NewIncidentArchiveService(source IncidentArchiveSource, maxLimit int) (*IncidentArchiveService, error) {
+	if source == nil || maxLimit < 1 {
+		return nil, errors.New("Incident archive source and positive query limit are required")
+	}
+	return &IncidentArchiveService{source: source, maxLimit: maxLimit}, nil
+}
+
+// List returns superseded revisions for one device-scoped rule.
+func (s *IncidentArchiveService) List(ctx context.Context, actor auth.Principal, deviceID, ruleID string, limit int) ([]IncidentArchive, error) {
+	if strings.TrimSpace(actor.UserID) == "" || (actor.Role != auth.RoleOwner && actor.Role != auth.RoleViewer) {
+		return nil, auth.ErrForbidden
+	}
+	if ctx == nil {
+		return nil, errors.New("Incident archive query context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := ValidateIncidentIdentity(deviceID, ruleID); err != nil || limit < 1 || limit > s.maxLimit {
+		return nil, fmt.Errorf("%w: valid device, rule, and bounded limit are required", ErrInvalidIncidentRequest)
+	}
+	archives, err := s.source.ListArchives(ctx, deviceID, ruleID, limit)
+	if err != nil {
+		return nil, err
+	}
+	if archives == nil {
+		archives = make([]IncidentArchive, 0)
+	}
+	return archives, nil
+}
+
 // IncidentActivationService authorizes explicit revision activation.
 type IncidentActivationService struct {
 	repository IncidentActivationRepository

@@ -165,6 +165,14 @@ export interface IncidentState {
   last_evaluation: 'true' | 'false' | 'unknown' | 'disabled'
 }
 
+/** Immutable snapshot retained when an Owner supersedes an older rule revision. */
+export interface IncidentArchive {
+  state: IncidentState
+  disposition: 'superseded'
+  superseded_by_revision: number
+  superseded_at: string
+}
+
 /** Lifecycle state for one explicitly authorized disk-capacity refresh. */
 export interface RefreshJob {
   request_id: string

@@ -21,11 +21,16 @@ type testIncidentActivationRepository struct {
 	deviceID       string
 	ruleID         string
 	targetRevision uint64
+	archives       []alerts.IncidentArchive
 }
 
 func (r *testIncidentActivationRepository) ActivateRuleRevisionWithAudit(_ context.Context, actorID, deviceID, ruleID string, targetRevision uint64, _ audit.Event) (alerts.IncidentActivationResult, error) {
 	r.actorID, r.deviceID, r.ruleID, r.targetRevision = actorID, deviceID, ruleID, targetRevision
 	return alerts.IncidentActivationResult{Ready: true}, nil
+}
+
+func (r *testIncidentActivationRepository) ListArchives(_ context.Context, _, _ string, _ int) ([]alerts.IncidentArchive, error) {
+	return r.archives, nil
 }
 
 func TestIncidentRouteAllowsOwnerAndViewerDeviceReads(t *testing.T) {
@@ -43,7 +48,11 @@ func TestIncidentRouteAllowsOwnerAndViewerDeviceReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewIncidentHandler(service, activation, fixture.handler, 4096)
+	archiveService, err := alerts.NewIncidentArchiveService(activationRepository, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewIncidentHandler(service, activation, archiveService, fixture.handler, 4096)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +106,14 @@ func TestIncidentRouteAllowsOwnerAndViewerDeviceReads(t *testing.T) {
 		t.Fatalf("invalid query status=%d body=%s", response.Code, response.Body.String())
 	}
 
+	request = authRequest(http.MethodGet, "https://monitor.example/api/v1/alerts/incidents/history?device_id=node%2Fa&rule_id=high-cpu&limit=4", "")
+	request.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: viewerToken})
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != `{"archives":[]}`+"\n" {
+		t.Fatalf("Viewer archive query status=%d body=%s", response.Code, response.Body.String())
+	}
+
 	body := `{"device_id":"node/a","rule_id":"high-cpu","target_revision":2}`
 	request = authRequest(http.MethodPost, "https://monitor.example/api/v1/owner/alerts/incidents/activate", body)
 	request.AddCookie(&http.Cookie{Name: humanSessionCookie, Value: viewerToken})
@@ -132,7 +149,11 @@ func TestRouterRejectsIncidentHandlerWithDifferentAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewIncidentHandler(service, activation, first.handler, 1024)
+	archiveService, err := alerts.NewIncidentArchiveService(&testIncidentActivationRepository{}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewIncidentHandler(service, activation, archiveService, first.handler, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}

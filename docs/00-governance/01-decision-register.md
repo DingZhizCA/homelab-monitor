@@ -49,6 +49,7 @@
 | ADR-037 | 当前 Incident 查询边界 | 告警评估显式启用时挂载只读 `/api/v1/alerts/incidents`；Owner 与 Viewer 通过 HTTPS Session 按唯一 `device_id` 读取评估器同一 SQLite 仓储中的当前转换状态。Web 只在进入告警页、切换设备或用户手动刷新时查询。查询不推进状态、不触发采集，也不把当前状态伪装成 Incident 历史；规则写入仍保持 Owner 专属 | 2026-10-25 按推荐实施 |
 | ADR-038 | Web 告警规则编辑边界 | 首批 Owner 编辑器只创建和修订可无损回填的单指标规则；级别、启用状态、Descriptor、运算符、阈值和全部维度都由 Owner 明确填写，不设业务默认值。Revision 按当前版本递增并携带 CAS；已有 AND/OR 表达式只读展示，防止被简化编辑器静默覆盖。所有规则均可查看不可变历史；回滚由 Owner 明确选择目标，Server 复制完整历史内容并创建下一个 Revision | 2026-10-25 按推荐实施 |
 | ADR-039 | Rule Revision 的 Incident 激活 | Rule Revision 变化不继承旧 Pending/Firing/Recovering 时间，也不自动关闭旧状态；引擎继续拒绝隐式跨版本推进。Owner 通过专用操作显式激活当前 Rule Revision，仓储原子复核 Owner、Rule Revision 和 Incident CAS，将旧 current 写入有界不可变 `superseded` 归档、删除 current 并提交审计；下一轮从干净状态评估。归档容量必须显式配置，容量满时保留旧状态并拒绝激活 | 2026-10-26 用户确认推荐方案 |
+| ADR-040 | Superseded Incident 归档查询 | Owner 与 Viewer 可通过只读 API 查询单一设备和规则的 superseded Revision；请求必须显式提供正整数条数上限且不得超过配置的归档总容量，结果从新到旧返回。Web 不预填上限、不自动读取，查询不推进评估、不触发采集 | 2026-10-26 按推荐实施 |
 
 ## 根据「全部按推荐」授权纳入基线、尚未逐项单独确认
 | ID | 领域 | 推荐基线 | 状态 |

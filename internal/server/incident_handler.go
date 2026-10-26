@@ -10,6 +10,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/DingZhizCA/homelab-monitor/internal/alerts"
 	"github.com/DingZhizCA/homelab-monitor/internal/auth"
@@ -19,16 +20,17 @@ import (
 type IncidentHandler struct {
 	service     *alerts.IncidentService
 	activation  *alerts.IncidentActivationService
+	archives    *alerts.IncidentArchiveService
 	auth        *AuthHandler
 	maxBodySize int64
 }
 
 // NewIncidentHandler requires query and activation services, matching auth, and a request limit.
-func NewIncidentHandler(service *alerts.IncidentService, activation *alerts.IncidentActivationService, authHandler *AuthHandler, maxBodySize int64) (*IncidentHandler, error) {
-	if service == nil || activation == nil || authHandler == nil || maxBodySize < 1 {
-		return nil, errors.New("Incident query and activation services, auth handler, and positive body limit are required")
+func NewIncidentHandler(service *alerts.IncidentService, activation *alerts.IncidentActivationService, archives *alerts.IncidentArchiveService, authHandler *AuthHandler, maxBodySize int64) (*IncidentHandler, error) {
+	if service == nil || activation == nil || archives == nil || authHandler == nil || maxBodySize < 1 {
+		return nil, errors.New("Incident query, activation, and archive services, auth handler, and positive body limit are required")
 	}
-	return &IncidentHandler{service: service, activation: activation, auth: authHandler, maxBodySize: maxBodySize}, nil
+	return &IncidentHandler{service: service, activation: activation, archives: archives, auth: authHandler, maxBodySize: maxBodySize}, nil
 }
 
 // Current lists current Incident transition states for one device.
@@ -62,6 +64,46 @@ func (h *IncidentHandler) Current(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		Incidents []alerts.IncidentState `json:"incidents"`
 	}{states})
+}
+
+// Archives lists bounded superseded revisions for one rule.
+func (h *IncidentHandler) Archives(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	principal, ok := authenticatedPrincipal(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "a valid session is required")
+		return
+	}
+	query := r.URL.Query()
+	deviceIDs, hasDevice := query["device_id"]
+	ruleIDs, hasRule := query["rule_id"]
+	limits, hasLimit := query["limit"]
+	if !hasDevice || !hasRule || !hasLimit || len(deviceIDs) != 1 || len(ruleIDs) != 1 || len(limits) != 1 || len(query) != 3 {
+		writeError(w, http.StatusBadRequest, "INVALID_INCIDENT_ARCHIVE_QUERY", "one device_id, rule_id, and limit are required")
+		return
+	}
+	limit, err := strconv.Atoi(limits[0])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_INCIDENT_ARCHIVE_QUERY", "limit must be a positive bounded integer")
+		return
+	}
+	archives, err := h.archives.List(r.Context(), principal, deviceIDs[0], ruleIDs[0], limit)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrForbidden):
+			writeError(w, http.StatusForbidden, "USER_REQUIRED", "an authenticated Owner or Viewer is required")
+		case errors.Is(err, alerts.ErrInvalidIncidentRequest):
+			writeError(w, http.StatusBadRequest, "INVALID_INCIDENT_ARCHIVE_QUERY", "valid device, rule, and bounded limit are required")
+		default:
+			writeError(w, http.StatusInternalServerError, "INCIDENT_ARCHIVE_QUERY_UNAVAILABLE", "Incident archives could not be loaded")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Archives []alerts.IncidentArchive `json:"archives"`
+	}{archives})
 }
 
 // Activate explicitly archives an older current state for a new rule revision.

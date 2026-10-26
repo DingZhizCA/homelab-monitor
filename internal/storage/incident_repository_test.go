@@ -103,6 +103,13 @@ func TestIncidentRepositoryExplicitlyArchivesAndActivatesNewRuleRevision(t *test
 	if err := databases.Core.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action = ?`, alerts.IncidentSupersedeAuditAction).Scan(&activationEvents); err != nil || activationEvents != 1 {
 		t.Fatalf("activation events=%d err=%v", activationEvents, err)
 	}
+	listed, err := repository.ListArchives(context.Background(), v1.DeviceID, v1.ID, 1)
+	if err != nil || len(listed) != 1 || listed[0].Disposition != alerts.IncidentArchiveSuperseded || listed[0].State.RuleRevision != 1 {
+		t.Fatalf("listed archives=%+v err=%v", listed, err)
+	}
+	if _, err := repository.ListArchives(context.Background(), v1.DeviceID, v1.ID, 2); !errors.Is(err, alerts.ErrInvalidIncidentRequest) {
+		t.Fatalf("over-limit archive query error=%v", err)
+	}
 	retry, err := repository.ActivateRuleRevisionWithAudit(context.Background(), ownerID, v1.DeviceID, v1.ID, 2, event)
 	if err != nil || !retry.Ready || retry.Archived != nil {
 		t.Fatalf("idempotent activation=%+v err=%v", retry, err)

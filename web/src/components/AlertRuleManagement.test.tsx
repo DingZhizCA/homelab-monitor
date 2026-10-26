@@ -106,4 +106,32 @@ describe('AlertRuleManagement', () => {
   expect(activationBody).toEqual({ device_id: 'node-a', rule_id: 'high-cpu', target_revision: 2 })
   expect(activated).toHaveBeenCalledOnce()
   })
+
+  it('loads superseded Incident archives only after an explicit bounded request', async () => {
+    const current = { id: 'high-cpu', device_id: 'node-a', revision: 2, severity: 'warning', enabled: true, expression: { metric: { descriptor_id: 'cpu.usage_percent', operator: 'gt', threshold: 90, unit: 'percent' } } }
+    let archiveRequest = ''
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.startsWith('/api/v1/owner/alert-rules?')) return { ok: true, status: 200, json: async () => ({ rules: [current] }) }
+      if (path === '/api/v1/dashboard/metrics/descriptors') return { ok: true, status: 200, json: async () => ({ descriptors: [] }) }
+      if (path.startsWith('/api/v1/owner/alert-rules/revisions?')) return { ok: true, status: 200, json: async () => ({ revisions: [current] }) }
+      if (path.startsWith('/api/v1/alerts/incidents/history?')) {
+        archiveRequest = path
+        return { ok: true, status: 200, json: async () => ({ archives: [{ state: { device_id: 'node-a', rule_id: 'high-cpu', rule_revision: 1, status: 'firing', last_evaluated_at: '2026-10-26T08:00:00Z', last_evaluation: 'true' }, disposition: 'superseded', superseded_by_revision: 2, superseded_at: '2026-10-26T09:00:00Z' }] }) }
+      }
+      throw new Error(`unexpected request ${path}`)
+    }))
+    render(<AlertRuleManagement deviceID="node-a"/>)
+    expect(await screen.findByText('high-cpu')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '历史' }))
+    expect(await screen.findByText('Superseded Incident 归档')).toBeInTheDocument()
+    expect(archiveRequest).toBe('')
+    fireEvent.click(screen.getByRole('button', { name: '读取 Incident 归档' }))
+    expect(await screen.findByText('请填写正整数归档条数上限。')).toBeInTheDocument()
+    expect(archiveRequest).toBe('')
+    fireEvent.change(screen.getByLabelText('归档条数上限'), { target: { value: '3' } })
+    fireEvent.click(screen.getByRole('button', { name: '读取 Incident 归档' }))
+    expect(await screen.findByText('由 Revision 2 替代')).toBeInTheDocument()
+    expect(archiveRequest).toContain('device_id=node-a&rule_id=high-cpu&limit=3')
+  })
 })
